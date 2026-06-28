@@ -19,5 +19,6 @@ apps/dashboard/node_modules/
 tmp/
 todo.md
 models/qtable.json
+!models/qtable.json
 # Active config (example is committed; real config is not)
 config.yaml

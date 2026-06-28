@@ -129,3 +129,14 @@ class ControllerConfig:
 
     # --- Observability ---
     metrics_port: int = field(default_factory=lambda: _int("metrics_port", "METRICS_PORT", 9108))
+
+    # --- RL tuner ---
+    rl_qtable_path: str = field(
+        default_factory=lambda: _str("rl_qtable_path", "RL_QTABLE_PATH", "models/qtable.json")
+    )
+    rl_alpha: float = field(default_factory=lambda: _float("rl_alpha", "RL_ALPHA", 0.1))
+    rl_gamma: float = field(default_factory=lambda: _float("rl_gamma", "RL_GAMMA", 0.9))
+    rl_epsilon: float = field(default_factory=lambda: _float("rl_epsilon", "RL_EPSILON", 0.1))
+    rl_train_episodes: int = field(
+        default_factory=lambda: _int("rl_train_episodes", "RL_TRAIN_EPISODES", 300)
+    )

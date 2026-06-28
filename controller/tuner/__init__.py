@@ -1,7 +1,8 @@
-"""Tuner package — exports AimdTuner and the build_tuner factory.
+"""Tuner package — exports AimdTuner, RLTuner, and the build_tuner factory.
 
-build_tuner(cfg) returns an AimdTuner for tuner_kind='aimd'.
-For tuner_kind='rl', it also returns an AimdTuner with a TODO — RL lands in commit 3.
+build_tuner(cfg) returns:
+  - RLTuner  when cfg.tuner_kind == 'rl'
+  - AimdTuner for any other value (default: 'aimd')
 """
 
 from __future__ import annotations
@@ -9,27 +10,26 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Union
 
 from controller.tuner.aimd import AimdTuner
+from controller.tuner.rl import RLTuner
 
 if TYPE_CHECKING:
     from controller.config import ControllerConfig
 
-Tuner = Union[AimdTuner]  # Union will widen when RLTuner is added in commit 3
+Tuner = Union[AimdTuner, RLTuner]
 
-__all__ = ["AimdTuner", "Tuner", "build_tuner"]
+__all__ = ["AimdTuner", "RLTuner", "Tuner", "build_tuner"]
 
 
-def build_tuner(cfg: "ControllerConfig") -> AimdTuner:
-    """Factory: return the appropriate tuner for cfg.tuner_kind.
+def build_tuner(cfg: "ControllerConfig") -> Tuner:
+    """Factory: return RLTuner if cfg.tuner_kind is 'rl', else AimdTuner.
 
-    commit 1: always returns AimdTuner.
-    TODO (commit 3): import RLTuner and return it when tuner_kind == 'rl'.
+    Args:
+        cfg: Controller configuration.
+
+    Returns:
+        A tuner exposing next_replicas(current, saturation) -> int and
+        next_max_num_seqs(current, saturation) -> int.
     """
     if cfg.tuner_kind.lower() == "rl":
-        # TODO (commit 3): return RLTuner(cfg) once rl.py is implemented
-        import logging
-
-        logging.getLogger("kube-ai.tuner").warning(
-            "tuner_kind=rl requested but RL tuner is not yet implemented (commit 3); "
-            "falling back to AimdTuner"
-        )
+        return RLTuner(cfg)
     return AimdTuner(cfg)
