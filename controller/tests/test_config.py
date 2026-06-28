@@ -45,6 +45,9 @@ def run_cfg_expr(expr: str, env: dict[str, str] | None = None) -> str:
     base_env = {k: v for k, v in os.environ.items()}
     for key in _CONFIG_ENV_KEYS:
         base_env.pop(key, None)
+    # Point subprocess at a guaranteed-nonexistent YAML so it can never load
+    # a live config.yaml from the repo root (subprocess inherits CWD = repo root).
+    base_env["KUBE_AI_CONFIG"] = "/nonexistent/kube-ai-test-config.yaml"
     if env:
         base_env.update(env)
     code = (

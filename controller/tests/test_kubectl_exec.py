@@ -276,6 +276,31 @@ def test_run_includes_timeout_command_in_message(monkeypatch: pytest.MonkeyPatch
 
 
 # ---------------------------------------------------------------------------
+# run() catches _build() exceptions — never raises, always returns (False, err)
+# ---------------------------------------------------------------------------
+
+
+def test_run_returns_false_when_build_raises() -> None:
+    """run() catches ValueError from _build() and returns (False, err) instead of raising.
+
+    SSH mode with no ssh_host causes _build() to raise ValueError.  The "Never raises"
+    contract on run() must hold even in that case.
+    """
+    runner = make_runner(mode="ssh", ssh_host="")
+    ok, out = runner.run("get pods")
+    assert ok is False
+    assert out != ""
+
+
+def test_run_error_message_contains_detail_when_build_raises() -> None:
+    """Error string from _build() exception is surfaced in the returned output."""
+    runner = make_runner(mode="docker", docker_container="")
+    ok, out = runner.run("get pods")
+    assert ok is False
+    assert "DOCKER_CONTAINER" in out
+
+
+# ---------------------------------------------------------------------------
 # Live kubectl check — skipped unless kubectl binary present
 # ---------------------------------------------------------------------------
 

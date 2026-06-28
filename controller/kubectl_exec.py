@@ -78,9 +78,13 @@ class KubectlCommandRunner:
         raise ValueError(f"unsupported exec_mode: {self.cfg.mode!r}")
 
     def run(self, command: str, check: bool = True) -> tuple[bool, str]:
-        """Run a kubectl subcommand; return (ok, output).  Never raises."""
-        wrapped = self._build(command)
+        """Run a kubectl subcommand; return (ok, output).  Never raises.
+
+        Catches all exceptions including ValueError raised by _build() (e.g. SSH
+        mode without ssh_host) so the caller is guaranteed a (bool, str) result.
+        """
         try:
+            wrapped = self._build(command)
             proc = subprocess.run(
                 wrapped,
                 shell=True,
@@ -95,3 +99,5 @@ class KubectlCommandRunner:
             return False, msg
         except subprocess.TimeoutExpired:
             return False, f"kubectl timed out after {self._TIMEOUT_SEC}s: {command}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"kubectl runner error: {exc}"

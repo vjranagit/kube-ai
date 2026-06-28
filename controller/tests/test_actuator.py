@@ -406,3 +406,39 @@ def test_action_old_max_num_seqs_reflects_state_before_apply() -> None:
     initial = actuator.state.current_max_num_seqs
     action = actuator.apply(make_decision(target_max_num_seqs=initial + 128))
     assert action.old_max_num_seqs == initial
+
+
+# ---------------------------------------------------------------------------
+# _sync_initial_state is best-effort: failures must not raise
+# ---------------------------------------------------------------------------
+
+
+def test_sync_initial_state_runner_failure_keeps_clamped_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_sync_initial_state() keeps the safe default when the runner returns failure."""
+    from controller.kubectl_exec import KubectlCommandRunner
+
+    monkeypatch.setattr(
+        KubectlCommandRunner,
+        "run",
+        lambda self, cmd, check=True: (False, "connection refused"),
+    )
+    cfg = make_cfg(min_replicas=1, max_replicas=8)
+    actuator = K8sActuator(cfg)  # must not raise
+    assert actuator.state.current_replicas == 1  # clamped default unchanged
+
+
+def test_sync_initial_state_runner_exception_does_not_propagate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_sync_initial_state() swallows unexpected runner exceptions (best-effort)."""
+    from controller.kubectl_exec import KubectlCommandRunner
+
+    def _explode(self: object, cmd: str, check: bool = True) -> None:
+        raise RuntimeError("unexpected error during sync")
+
+    monkeypatch.setattr(KubectlCommandRunner, "run", _explode)
+    cfg = make_cfg(min_replicas=2, max_replicas=8)
+    actuator = K8sActuator(cfg)  # must not raise
+    assert cfg.min_replicas <= actuator.state.current_replicas <= cfg.max_replicas

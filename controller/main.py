@@ -13,8 +13,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import signal
 import sys
-import time
+import threading
 from dataclasses import asdict
 
 from prometheus_client import start_http_server
@@ -64,67 +65,82 @@ def run(cfg: ControllerConfig, max_iterations: int = 0) -> None:
         cfg.metrics_port,
     )
 
+    # --- Graceful shutdown via SIGTERM / SIGINT ---
+    _shutdown = threading.Event()
+
+    def _handle_signal(signum: int, frame: object) -> None:
+        LOG.info("signal %d received, initiating graceful shutdown", signum)
+        _shutdown.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     iteration = 0
-    while True:
+    while not _shutdown.is_set():
         iteration += 1
 
-        # 1. Collect
-        snap = collector.snapshot()
+        try:
+            # 1. Collect
+            snap = collector.snapshot()
 
-        # 2. Score
-        sat = policy.saturation_score(snap)
+            # 2. Score
+            sat = policy.saturation_score(snap)
 
-        # 3. Tune
-        target_replicas = tuner.next_replicas(actuator.state.current_replicas, sat)
-        target_max_num_seqs = tuner.next_max_num_seqs(actuator.state.current_max_num_seqs, sat)
+            # 3. Tune
+            target_replicas = tuner.next_replicas(actuator.state.current_replicas, sat)
+            target_max_num_seqs = tuner.next_max_num_seqs(actuator.state.current_max_num_seqs, sat)
 
-        decision = PolicyDecision(
-            target_replicas=target_replicas,
-            target_max_num_seqs=target_max_num_seqs,
-            saturation=sat,
-            reason=(
-                "scale_out"
-                if sat >= cfg.pressure_high
-                else ("scale_in" if sat <= cfg.pressure_low else "hold")
-            ),
-        )
+            decision = PolicyDecision(
+                target_replicas=target_replicas,
+                target_max_num_seqs=target_max_num_seqs,
+                saturation=sat,
+                reason=(
+                    "scale_out"
+                    if sat >= cfg.pressure_high
+                    else ("scale_in" if sat <= cfg.pressure_low else "hold")
+                ),
+            )
 
-        # 4. Actuate
-        applied = actuator.apply(decision)
+            # 4. Actuate
+            applied = actuator.apply(decision)
 
-        # 5. Set metrics
-        SATURATION.set(sat)
-        REQUESTS_WAITING.set(snap.requests_waiting)
-        REQUESTS_RUNNING.set(snap.requests_running)
-        KV_CACHE_USAGE.set(snap.kv_cache_usage_perc)
-        TARGET_REPLICAS.set(applied.new_replicas)
-        READY_REPLICAS.set(snap.ready_replicas)
-        TARGET_MAX_NUM_SEQS.set(applied.new_max_num_seqs)
-        ACTION_CHANGED.set(1 if applied.changed else 0)
-        P95_TTFT.set(snap.p95_ttft_sec)
-        QUEUE_PRESSURE.set(snap.queue_pressure)
-        CACHE_PRESSURE.set(snap.cache_pressure)
-        LATENCY_PRESSURE.set(snap.latency_pressure)
+            # 5. Set metrics
+            SATURATION.set(sat)
+            REQUESTS_WAITING.set(snap.requests_waiting)
+            REQUESTS_RUNNING.set(snap.requests_running)
+            KV_CACHE_USAGE.set(snap.kv_cache_usage_perc)
+            TARGET_REPLICAS.set(applied.new_replicas)
+            READY_REPLICAS.set(snap.ready_replicas)
+            TARGET_MAX_NUM_SEQS.set(applied.new_max_num_seqs)
+            ACTION_CHANGED.set(1 if applied.changed else 0)
+            P95_TTFT.set(snap.p95_ttft_sec)
+            QUEUE_PRESSURE.set(snap.queue_pressure)
+            CACHE_PRESSURE.set(snap.cache_pressure)
+            LATENCY_PRESSURE.set(snap.latency_pressure)
 
-        LOG.info(
-            "tick=%d %s",
-            iteration,
-            json.dumps(
-                {
-                    "snapshot": asdict(snap),
-                    "decision": asdict(decision),
-                    "applied": asdict(applied),
-                },
-                default=str,
-            ),
-        )
+            LOG.info(
+                "tick=%d %s",
+                iteration,
+                json.dumps(
+                    {
+                        "snapshot": asdict(snap),
+                        "decision": asdict(decision),
+                        "applied": asdict(applied),
+                    },
+                    default=str,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOG.error("tick=%d failed, continuing: %s", iteration, exc, exc_info=True)
 
-        # 6. Sleep (or exit if bounded run)
+        # 6. Exit if bounded run; otherwise sleep (interruptible by shutdown signal)
         if max_iterations > 0 and iteration >= max_iterations:
             LOG.info("max_iterations=%d reached, exiting", max_iterations)
             return
 
-        time.sleep(cfg.interval_sec)
+        _shutdown.wait(timeout=cfg.interval_sec)
+
+    LOG.info("kube-ai controller shut down cleanly")
 
 
 def _parse_args() -> argparse.Namespace:

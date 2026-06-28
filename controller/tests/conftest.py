@@ -7,7 +7,17 @@ from typing import Any
 
 import pytest
 
+import controller.config as _cc_module
 from controller.config import ControllerConfig
+
+# ---------------------------------------------------------------------------
+# Test isolation: clear the module-level _YAML cache NOW, before any test
+# module is imported.  apps/api/main.py runs  cfg = ControllerConfig()  at
+# import time; if _YAML still holds live values from a repo-root config.yaml,
+# those tests will get wrong defaults.  Resetting here (at conftest import
+# time) ensures all subsequent imports see an empty cache.
+# ---------------------------------------------------------------------------
+_cc_module._YAML = {}
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +62,16 @@ def make_cfg(**overrides: Any) -> ControllerConfig:
 def default_cfg() -> ControllerConfig:
     """ControllerConfig with safe test defaults (no env side-effects)."""
     return make_cfg()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Autouse per-test: keep controller.config._YAML empty for every test.
+
+    Prevents any on-disk config.yaml from leaking live values into
+    ControllerConfig() calls that omit explicit parameters.
+    """
+    monkeypatch.setattr(_cc_module, "_YAML", {})
 
 
 # ---------------------------------------------------------------------------

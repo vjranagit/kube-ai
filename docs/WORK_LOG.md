@@ -30,3 +30,44 @@ None found in controller code. All modules matched their documented contracts ex
 - feat(ui) 1dfd9e1: Chart.js live dashboard + config editor + loop start/stop; 65 api+ui tests green.
 - feat(tuner) 36f22bb: tabular Q-learning RLTuner (replicas + max_num_seqs) + ServingSimulator + training; qtable tracked. Full suite 286 passing.
 - Next: kind e2e + stress + benchmark, then audit + gap passes.
+
+## 2026-06-28 — e2e milestone (commit 87dc95e)
+
+6/6 live verdicts PASS on the kind sandbox:
+- Scale-in 4→2→1 replicas under low pressure; scale-out 1→5 replicas under high pressure.
+- max_num_seqs tuned 128→768 in response to KV-cache saturation.
+- Bounds respected (min_replicas=1, max_replicas=5, min_max_num_seqs=128, max_max_num_seqs=1024).
+- 294 tests green in a clean checkout (no config.yaml present).
+
+## 2026-06-28 — Gap fixes: test isolation + loop hardening
+
+### Test isolation (12 failures fixed)
+
+Root cause: `controller/config.py` loads `_YAML` once at module import time from `config.yaml`
+(or `KUBE_AI_CONFIG`). When a live `config.yaml` is present (e2e / sandbox mode):
+- `apps/api/main.py` calls `ControllerConfig()` at import time → wrong defaults → 3 test_api/ui failures.
+- `test_config.py` subprocesses inherit CWD=repo root, strip `KUBE_AI_CONFIG`, then find
+  the live `config.yaml` → 9 subprocess test failures.
+
+Fix applied:
+- `controller/tests/conftest.py`: reset `controller.config._YAML = {}` at conftest import time
+  (before any test module imports `apps.api.main`); plus autouse per-test fixture that
+  monkeypatches `_YAML` to `{}` for every test function.
+- `controller/tests/test_config.py`: `run_cfg_expr()` sets
+  `KUBE_AI_CONFIG=/nonexistent/kube-ai-test-config.yaml` in the subprocess env (after
+  stripping other config keys) so the subprocess never loads a live yaml file.
+
+Verified: `pytest -q` 297 passed, 0 failed — both with and without `config.yaml` present.
+
+### Loop hardening (minimal, well-tested changes)
+
+- `controller/kubectl_exec.py`: added `except Exception` fallthrough so `run()` truly
+  never raises — catches `ValueError` from `_build()` (e.g. SSH/docker mode misconfiguration).
+  2 new tests in `test_kubectl_exec.py`.
+- `controller/main.py`: wrapped each tick body in `try/except Exception` (logs and continues);
+  added SIGTERM/SIGINT handler via `threading.Event` so `_shutdown.wait()` replaces
+  `time.sleep()` and exits immediately on signal. `--max-iterations` behaviour unchanged.
+- `controller/actuator/k8s.py`: `_sync_initial_state()` already best-effort (try/except).
+  Added 2 explicit tests in `test_actuator.py` (runner returns False; runner raises).
+- `controller/collectors/k8s.py`: already returns `metrics_available=False` on any fetch
+  failure (existing tests confirm). No code change needed.
