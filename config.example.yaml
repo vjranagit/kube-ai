@@ -1,0 +1,52 @@
+# config.example.yaml — copy to config.yaml and adjust
+# All fields can be overridden by environment variables (see .env.example).
+# Config is read at import time; set env vars before starting the process.
+
+# --- Control loop ---
+tune_mode: both          # replicas | params | both
+interval_sec: 30         # seconds between control-loop iterations
+cooldown_sec: 60         # minimum seconds between replica-scale applies
+param_cooldown_sec: 300  # minimum seconds between max-num-seqs param applies (longer: needs restart)
+dry_run: true            # true = log commands only; false = apply to cluster
+
+# --- Replica bounds ---
+min_replicas: 1
+max_replicas: 8
+
+# --- max-num-seqs bounds ---
+min_max_num_seqs: 128
+max_max_num_seqs: 2048
+
+# --- Saturation thresholds ---
+pressure_high: 0.75      # above this → scale out
+pressure_low: 0.35       # below this → scale in
+
+# --- Latency SLO ---
+ttft_slo_sec: 2.0        # p95 TTFT target; above this → latency_pressure > 0
+
+# --- Deployment target ---
+vllm_deployment: vllm-server     # name of the Kubernetes Deployment
+vllm_namespace: default          # Kubernetes namespace
+
+# --- vLLM metrics ---
+vllm_mode: mock          # mock | real
+vllm_metrics_url: "http://vllm-service:8000/metrics"   # used when vllm_mode=real
+
+# --- kubectl execution mode ---
+exec_mode: local         # local | ssh | docker
+context: ""              # kubectl context (blank = current context)
+namespace: default       # default namespace for kubectl calls
+
+# SSH mode (exec_mode=ssh)
+ssh_host: ""
+ssh_user: ""
+ssh_key_file: ""         # path to SSH private key (optional)
+
+# Docker mode (exec_mode=docker)
+docker_container: ""     # docker container name
+
+# --- Tuner ---
+tuner_kind: aimd         # aimd | rl (rl lands in commit 3)
+
+# --- Observability ---
+metrics_port: 9108       # Prometheus metrics HTTP port (loop process)

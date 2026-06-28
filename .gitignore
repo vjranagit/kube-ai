@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.venv/
+.egg-info/
+*.egg-info/
+.env
+.env.local
+.env.production
+*.log
+*.pid
+data/
+artifacts/
+node_modules/
+apps/dashboard/dist/
+apps/dashboard/node_modules/
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+tmp/
+todo.md
+models/qtable.json
+# Active config (example is committed; real config is not)
+config.yaml

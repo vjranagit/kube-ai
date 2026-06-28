@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kube-ai — vLLM Serving Controller</title>
+    <style>
+      :root {
+        --bg: #081022;
+        --panel: #111c36;
+        --line: #2d3f69;
+        --text: #e6ecff;
+        --muted: #9fb2de;
+        --good: #29d391;
+        --warn: #f4c95d;
+        --bad: #ff6b6b;
+      }
+      body {
+        margin: 0;
+        background: radial-gradient(circle at 10% 10%, #172b5a, var(--bg));
+        color: var(--text);
+        font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      }
+      .wrap {
+        max-width: 1200px;
+        margin: 24px auto;
+        padding: 0 16px;
+      }
+      h1 { margin-bottom: 4px; }
+      p.subtitle { color: var(--muted); margin-top: 0; font-size: 14px; }
+      .grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      }
+      .card {
+        background: linear-gradient(180deg, #17274e, var(--panel));
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px;
+      }
+      .k { font-size: 12px; color: var(--muted); }
+      .v { font-size: 28px; font-weight: 700; margin-top: 6px; }
+      .status {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+      }
+      .good { background: #124b37; color: #9ff5cf; }
+      .warn { background: #5a4a12; color: #ffe9a8; }
+      .bad  { background: #571f1f; color: #ffc3c3; }
+      pre {
+        background: #0b1428;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        overflow: auto;
+        font-size: 13px;
+      }
+      .err { color: var(--bad); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>kube-ai</h1>
+      <p class="subtitle">Adaptive vLLM serving controller — live signals</p>
+      <div class="grid" id="cards"></div>
+      <h3>Raw Snapshot</h3>
+      <pre id="raw">loading...</pre>
+    </div>
+
+    <script>
+      function pressure_label(v) {
+        if (v >= 0.75) return ["high", "bad"];
+        if (v <= 0.35) return ["low", "good"];
+        return ["moderate", "warn"];
+      }
+
+      function fmt(v, digits) {
+        if (v === null || v === undefined) return "—";
+        if (typeof v === "number") return v.toFixed(digits ?? 3);
+        return String(v);
+      }
+
+      async function tick() {
+        let d;
+        try {
+          const r = await fetch("/serving/snapshot");
+          d = await r.json();
+        } catch (e) {
+          document.getElementById("raw").textContent = "fetch error: " + e;
+          return;
+        }
+
+        const sat = d.queue_pressure * 0.5 + d.cache_pressure * 0.3 + d.latency_pressure * 0.2;
+        const [stxt, scls] = pressure_label(sat);
+
+        const cards = [
+          ["Requests Waiting",   fmt(d.requests_waiting, 0), null],
+          ["Requests Running",   fmt(d.requests_running, 0), null],
+          ["Requests Swapped",   fmt(d.requests_swapped, 0), d.requests_swapped > 0 ? "bad" : "good"],
+          ["KV Cache Usage",     fmt(d.kv_cache_usage_perc), "cache_pressure"],
+          ["Queue Pressure",     fmt(d.queue_pressure), "queue_pressure"],
+          ["Latency Pressure",   fmt(d.latency_pressure), "latency_pressure"],
+          ["Saturation",         fmt(sat), "saturation"],
+          ["p95 TTFT (s)",       fmt(d.p95_ttft_sec), null],
+          ["Ready Replicas",     fmt(d.ready_replicas, 0) + " / " + fmt(d.desired_replicas, 0), null],
+          ["max_num_seqs",       fmt(d.current_max_num_seqs, 0), null],
+        ];
+
+        document.getElementById("cards").innerHTML = cards
+          .map(([k, v, cls_or_field]) => {
+            let badge = "";
+            if (cls_or_field === "saturation") {
+              badge = `<span class="status ${scls}">${stxt}</span>`;
+            } else if (cls_or_field === "queue_pressure" || cls_or_field === "cache_pressure" || cls_or_field === "latency_pressure") {
+              const fval = parseFloat(v);
+              const [t, c] = pressure_label(fval);
+              badge = `<span class="status ${c}">${t}</span>`;
+            } else if (cls_or_field === "good" || cls_or_field === "bad") {
+              badge = `<span class="status ${cls_or_field}">${cls_or_field}</span>`;
+            }
+            return `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${badge}</div>`;
+          })
+          .join("");
+
+        document.getElementById("raw").textContent = JSON.stringify(d, null, 2);
+      }
+
+      tick();
+      setInterval(tick, 5000);
+    </script>
+  </body>
+</html>
