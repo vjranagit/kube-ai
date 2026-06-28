@@ -31,9 +31,7 @@ spec:
             - name: PORT
               value: "8000"
             - name: MOCK_REPLICAS
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.replicas
+              value: "1"
             - name: MODEL_NAME
               value: "mistral"
           resources:

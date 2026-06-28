@@ -11,6 +11,9 @@ KIND="${KIND:-kind}"
 CLUSTER_NAME="kube-ai"
 COMPOSE_FILE="$ROOT/infra/docker/docker-compose.yml"
 
+# Use project-local kubeconfig
+export KUBECONFIG="${KUBECONFIG:-$TMP/kubeconfig}"
+
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 
 # ---------------------------------------------------------------------------

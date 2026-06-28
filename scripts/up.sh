@@ -13,7 +13,19 @@ KIND="${KIND:-kind}"
 KUBECTL="${KUBECTL:-kubectl}"
 CLUSTER_NAME="kube-ai"
 
+# Use a project-local kubeconfig to avoid conflicts with ~/.kube/config being a directory.
+export KUBECONFIG="${KUBECONFIG:-$TMP/kubeconfig}"
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
+
+log "Using KUBECONFIG=$KUBECONFIG"
+
+# ---------------------------------------------------------------------------
+# 0. Build mock-vllm image (always rebuild to ensure fresh image)
+# ---------------------------------------------------------------------------
+log "Building mock-vllm:latest (log: tmp/docker-build.log) ..."
+docker build -t mock-vllm:latest "$ROOT/infra/mock-vllm" \
+  > "$TMP/docker-build.log" 2>&1
+log "mock-vllm:latest built."
 
 # ---------------------------------------------------------------------------
 # 1. Create kind cluster (skip if it already exists)
@@ -25,6 +37,7 @@ else
   "$KIND" create cluster \
     --name "$CLUSTER_NAME" \
     --config "$ROOT/infra/kind/cluster.yaml" \
+    --kubeconfig "$KUBECONFIG" \
     > "$TMP/kind-create.log" 2>&1 &
   KIND_PID=$!
   log "Waiting for kind cluster creation (pid=$KIND_PID) ..."
@@ -42,16 +55,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Load mock-vllm image into kind (if local image exists)
+# 2. Load mock-vllm image into kind
 # ---------------------------------------------------------------------------
-if docker image inspect mock-vllm:latest &>/dev/null; then
-  log "Loading mock-vllm:latest into kind cluster ..."
-  "$KIND" load docker-image mock-vllm:latest --name "$CLUSTER_NAME" \
-    >> "$TMP/kind-load.log" 2>&1 || true
-else
-  log "WARNING: mock-vllm:latest not found locally — build it first with:"
-  log "  docker build -t mock-vllm:latest infra/mock-vllm/"
-fi
+log "Loading mock-vllm:latest into kind cluster (log: tmp/kind-load.log) ..."
+"$KIND" load docker-image mock-vllm:latest --name "$CLUSTER_NAME" \
+  > "$TMP/kind-load.log" 2>&1
+log "mock-vllm:latest loaded into kind."
 
 # ---------------------------------------------------------------------------
 # 3. Apply Kubernetes manifests
@@ -64,7 +73,7 @@ MANIFESTS=(
   "$ROOT/infra/k8s/controller-rbac.yaml"
 )
 for f in "${MANIFESTS[@]}"; do
-  "$KUBECTL" --context "kind-$CLUSTER_NAME" apply -f "$f"
+  KUBECONFIG="$KUBECONFIG" "$KUBECTL" --context "kind-$CLUSTER_NAME" apply -f "$f"
 done
 
 # ---------------------------------------------------------------------------
@@ -89,7 +98,7 @@ wait "$COMPOSE_PID" || { log "ERROR: docker compose up failed. See tmp/compose-u
 # 5. Wait for mock-vllm rollout
 # ---------------------------------------------------------------------------
 log "Waiting for vllm-server rollout ..."
-"$KUBECTL" --context "kind-$CLUSTER_NAME" \
+KUBECONFIG="$KUBECONFIG" "$KUBECTL" --context "kind-$CLUSTER_NAME" \
   rollout status deployment/vllm-server \
   --namespace kube-ai \
   --timeout=120s

@@ -222,5 +222,12 @@ def reset() -> Response:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+    # Accept --max-num-seqs so that Kubernetes spec.args patches don't crash the server.
+    # The value is not used by the mock (capacity is modelled via MOCK_REPLICAS env var).
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--max-num-seqs", type=int, default=256)
+    _known, _rest = parser.parse_known_args()
+
     port = int(os.environ.get("PORT", "8000"))
     app.run(host="0.0.0.0", port=port, threaded=True)

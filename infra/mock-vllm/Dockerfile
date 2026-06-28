@@ -11,4 +11,6 @@ COPY app.py .
 ENV PORT=8000
 EXPOSE 8000
 
-CMD ["python", "app.py"]
+# Use ENTRYPOINT so that Kubernetes spec.args (e.g. --max-num-seqs=256) are
+# appended to the command rather than replacing it entirely.
+ENTRYPOINT ["python", "app.py"]
