@@ -124,3 +124,32 @@ Verified: `pytest -q` 297 passed, 0 failed — both with and without `config.yam
   Added 2 explicit tests in `test_actuator.py` (runner returns False; runner raises).
 - `controller/collectors/k8s.py`: already returns `metrics_available=False` on any fetch
   failure (existing tests confirm). No code change needed.
+
+## 2026-06-28 — v0.1.0 release
+
+Tagged v0.1.0. Final state of the MVP:
+
+### What shipped
+- **Control loop**: collect → policy → AIMD/RL tune → actuate, two tunables (`replicas` +
+  `--max-num-seqs`), selectable via `TUNE_MODE`. AIMD and tabular-RL tuners both implemented.
+- **Safety**: dry-run default, double-clamped bounds (min_replicas≥1 enforced at construction
+  and in actuator), per-path cooldowns, state-on-success, injection-safe kubectl, no destructive ops.
+- **Sandbox**: kind + mock-vLLM (real `vllm:*` metric names) + Prometheus + Grafana; `scripts/up.sh`
+  brings up the full stack in one command.
+- **Web UI**: Chart.js live dashboard + config editor + loop start/stop. Served by FastAPI on :8080.
+- **Tests**: 331 unit tests, all passing with and without `config.yaml` present.
+- **Live e2e**: 6/6 verdicts PASS on kind cluster — scale-out 1→5, scale-in 4→2→1,
+  max_num_seqs 128→768, bounds never violated, state-on-success confirmed.
+- **Audit**: all Critical + High findings resolved (injection-safe kubectl, min-replicas floor,
+  args-preserving patch, RL robustness, UI pipe-deadlock fix, idempotency, config validation).
+- **Docs**: release-quality README with Mermaid diagrams, ATTRIBUTION.md, PRODUCTION_READINESS.md
+  with UI smoke results and go-live checklist for real vLLM on GPU hosts.
+- **License**: MIT.
+
+### Files written in this release commit
+- `README.md` — rewrite with Mermaid diagrams, config table, safety invariants, tuner docs
+- `LICENSE` — MIT
+- `docs/ATTRIBUTION.md` — paper attributions + dependency licenses
+- `docs/PRODUCTION_READINESS.md` — verified status, known limitations, go-live checklist
+- `docs/WORK_LOG.md` — this entry
+- `docs/MORNING_REVIEW.md` — updated final state + deferred items
