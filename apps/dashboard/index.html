@@ -4,133 +4,615 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kube-ai — vLLM Serving Controller</title>
+    <!-- Chart.js via CDN (no build step) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
       :root {
-        --bg: #081022;
+        --bg:    #081022;
         --panel: #111c36;
-        --line: #2d3f69;
-        --text: #e6ecff;
+        --line:  #2d3f69;
+        --text:  #e6ecff;
         --muted: #9fb2de;
-        --good: #29d391;
-        --warn: #f4c95d;
-        --bad: #ff6b6b;
+        --good:  #29d391;
+        --warn:  #f4c95d;
+        --bad:   #ff6b6b;
+        --accent:#4c8ef5;
       }
+      *, *::before, *::after { box-sizing: border-box; }
       body {
         margin: 0;
         background: radial-gradient(circle at 10% 10%, #172b5a, var(--bg));
         color: var(--text);
         font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+        font-size: 14px;
       }
-      .wrap {
-        max-width: 1200px;
-        margin: 24px auto;
-        padding: 0 16px;
+      .wrap { max-width: 1280px; margin: 0 auto; padding: 20px 16px 40px; }
+
+      /* ── Header ─────────────────────────────────────────────────────────── */
+      .hdr {
+        display: flex; align-items: flex-start; justify-content: space-between;
+        flex-wrap: wrap; gap: 12px; margin-bottom: 24px;
       }
-      h1 { margin-bottom: 4px; }
-      p.subtitle { color: var(--muted); margin-top: 0; font-size: 14px; }
+      h1 { margin: 0 0 2px; font-size: 26px; }
+      .subtitle { color: var(--muted); margin: 0; font-size: 13px; }
+
+      /* ── Loop controls ───────────────────────────────────────────────────── */
+      .loop-ctrl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .btn {
+        cursor: pointer; border: none; border-radius: 8px; padding: 7px 16px;
+        font-size: 13px; font-weight: 600; transition: opacity .15s;
+      }
+      .btn:hover { opacity: .85; }
+      .btn-start { background: #1a4d35; color: #9ff5cf; }
+      .btn-stop  { background: #571f1f; color: #ffc3c3; }
+      .btn-save  { background: #1a3566; color: #a8c4ff; }
+      #loop-pid  { font-size: 12px; color: var(--muted); }
+
+      /* ── Badges ─────────────────────────────────────────────────────────── */
+      .badge {
+        display: inline-block; padding: 3px 10px; border-radius: 999px;
+        font-size: 12px; font-weight: 600;
+      }
+      .badge-good { background: #124b37; color: #9ff5cf; }
+      .badge-warn { background: #5a4a12; color: #ffe9a8; }
+      .badge-bad  { background: #571f1f; color: #ffc3c3; }
+      .badge-off  { background: #222d4a; color: var(--muted); }
+
+      /* ── Section headings ────────────────────────────────────────────────── */
+      h2 { font-size: 16px; margin: 28px 0 10px; color: var(--muted);
+           text-transform: uppercase; letter-spacing: .07em; }
+      h3 { font-size: 14px; margin: 0 0 8px; color: var(--muted); }
+
+      /* ── Saturation gauge ────────────────────────────────────────────────── */
+      .sat-row {
+        display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+        background: linear-gradient(180deg,#17274e,var(--panel));
+        border: 1px solid var(--line); border-radius: 18px; padding: 20px 24px;
+        margin-bottom: 14px;
+      }
+      .gauge-svg-wrap {
+        position: relative; flex: 0 0 180px; height: 100px;
+      }
+      .gauge-svg-wrap svg { width: 180px; height: 100px; }
+      .gauge-center {
+        position: absolute; top: 40%; left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+      }
+      .gauge-num { font-size: 30px; font-weight: 700; }
+      .gauge-unit { font-size: 11px; color: var(--muted); }
+      .sat-meta { flex: 1; min-width: 180px; }
+      .sat-meta .big-label { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+      .sat-meta .thr-row  { font-size: 12px; color: var(--muted); margin-top: 6px; }
+      .sub-scores {
+        display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+      }
+      .sub-scores .card { flex: 1; min-width: 130px; }
+
+      /* ── Metric cards ────────────────────────────────────────────────────── */
       .grid {
-        display: grid;
-        gap: 12px;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        display: grid; gap: 12px;
+        grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+        margin-bottom: 14px;
       }
       .card {
-        background: linear-gradient(180deg, #17274e, var(--panel));
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 14px;
+        background: linear-gradient(180deg,#17274e,var(--panel));
+        border: 1px solid var(--line); border-radius: 14px; padding: 14px;
       }
-      .k { font-size: 12px; color: var(--muted); }
-      .v { font-size: 28px; font-weight: 700; margin-top: 6px; }
-      .status {
-        display: inline-block;
-        margin-top: 8px;
-        padding: 3px 8px;
-        border-radius: 999px;
-        font-size: 12px;
+      .k { font-size: 11px; color: var(--muted); text-transform: uppercase;
+           letter-spacing: .06em; }
+      .v { font-size: 26px; font-weight: 700; margin: 6px 0 4px; line-height: 1.1; }
+      .v-sm { font-size: 19px; }
+
+      /* ── Charts ──────────────────────────────────────────────────────────── */
+      .charts-grid {
+        display: grid; gap: 14px;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        margin-bottom: 14px;
       }
-      .good { background: #124b37; color: #9ff5cf; }
-      .warn { background: #5a4a12; color: #ffe9a8; }
-      .bad  { background: #571f1f; color: #ffc3c3; }
+      .chart-card {
+        background: linear-gradient(180deg,#17274e,var(--panel));
+        border: 1px solid var(--line); border-radius: 14px; padding: 14px;
+      }
+      .chart-card canvas { width: 100% !important; height: 160px !important; }
+
+      /* ── Config editor ───────────────────────────────────────────────────── */
+      .cfg-grid {
+        display: grid; gap: 10px 18px;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        margin-bottom: 14px;
+      }
+      .cfg-field label {
+        display: block; font-size: 11px; color: var(--muted);
+        text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px;
+      }
+      .cfg-field input, .cfg-field select {
+        width: 100%; background: #0b1428; color: var(--text);
+        border: 1px solid var(--line); border-radius: 8px;
+        padding: 7px 10px; font-size: 13px;
+      }
+      .cfg-field input:focus, .cfg-field select:focus {
+        outline: none; border-color: var(--accent);
+      }
+      .cfg-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+      #cfg-msg { font-size: 13px; }
+      .cfg-ok  { color: var(--good); }
+      .cfg-err { color: var(--bad); }
+
+      /* ── Raw / error text ────────────────────────────────────────────────── */
       pre {
-        background: #0b1428;
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 12px;
-        overflow: auto;
-        font-size: 13px;
+        background: #0b1428; border: 1px solid var(--line); border-radius: 14px;
+        padding: 12px; overflow: auto; font-size: 12px; color: var(--muted);
       }
       .err { color: var(--bad); }
+      #fetch-err { color: var(--bad); font-size: 13px; min-height: 18px; }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <h1>kube-ai</h1>
-      <p class="subtitle">Adaptive vLLM serving controller — live signals</p>
-      <div class="grid" id="cards"></div>
-      <h3>Raw Snapshot</h3>
-      <pre id="raw">loading...</pre>
-    </div>
+
+      <!-- ── Header ────────────────────────────────────────────────────────── -->
+      <div class="hdr">
+        <div>
+          <h1>kube-ai</h1>
+          <p class="subtitle">Adaptive vLLM serving controller — live signals</p>
+        </div>
+        <div class="loop-ctrl">
+          <span id="loop-badge" class="badge badge-off">loop: unknown</span>
+          <button class="btn btn-start" onclick="loopAction('start')">Start Loop</button>
+          <button class="btn btn-stop"  onclick="loopAction('stop')">Stop Loop</button>
+          <span id="loop-pid"></span>
+        </div>
+      </div>
+
+      <div id="fetch-err"></div>
+
+      <!-- ── Saturation gauge ───────────────────────────────────────────────── -->
+      <h2>Saturation</h2>
+      <div class="sat-row">
+        <!-- SVG arc gauge -->
+        <div class="gauge-svg-wrap">
+          <svg viewBox="0 0 180 100" xmlns="http://www.w3.org/2000/svg">
+            <!-- background track -->
+            <path d="M 12 98 A 83 83 0 1 1 168 98"
+                  fill="none" stroke="#1e3060" stroke-width="14" stroke-linecap="round"/>
+            <!-- threshold: low (yellow) -->
+            <circle id="thr-low-dot" cx="90" cy="7" r="4" fill="#f4c95d"/>
+            <!-- threshold: high (red) -->
+            <circle id="thr-high-dot" cx="90" cy="7" r="4" fill="#ff6b6b"/>
+            <!-- value arc (updated by JS) -->
+            <path id="sat-arc" d="" fill="none" stroke="#29d391"
+                  stroke-width="14" stroke-linecap="round"/>
+          </svg>
+          <div class="gauge-center">
+            <div class="gauge-num" id="sat-num">—</div>
+            <div class="gauge-unit">saturation</div>
+          </div>
+        </div>
+
+        <div class="sat-meta">
+          <div class="big-label" id="sat-label">—</div>
+          <div id="sat-badge-wrap"></div>
+          <div class="thr-row">
+            Low threshold: <strong id="thr-low-val">0.35</strong> &nbsp;·&nbsp;
+            High threshold: <strong id="thr-high-val">0.75</strong>
+          </div>
+          <div class="thr-row" style="margin-top:4px">
+            tune_mode: <strong id="tune-mode-disp">—</strong> &nbsp;·&nbsp;
+            dry_run: <strong id="dry-run-disp">—</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Sub-scores ─────────────────────────────────────────────────────── -->
+      <div class="sub-scores">
+        <div class="card">
+          <div class="k">Queue Pressure</div>
+          <div class="v" id="sq">—</div>
+          <div id="sq-badge"></div>
+        </div>
+        <div class="card">
+          <div class="k">Cache Pressure</div>
+          <div class="v" id="sc">—</div>
+          <div id="sc-badge"></div>
+        </div>
+        <div class="card">
+          <div class="k">Latency Pressure</div>
+          <div class="v" id="sl">—</div>
+          <div id="sl-badge"></div>
+        </div>
+      </div>
+
+      <!-- ── Metric cards ───────────────────────────────────────────────────── -->
+      <h2>Metrics</h2>
+      <div class="grid" id="metric-cards"></div>
+
+      <!-- ── Time-series charts ──────────────────────────────────────────────── -->
+      <h2>History <span style="font-size:11px;font-weight:normal">(last 60 ticks)</span></h2>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>Saturation &amp; Pressure Sub-scores</h3>
+          <canvas id="chart-sat"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Replicas (target vs ready)</h3>
+          <canvas id="chart-rep"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>p95 TTFT (s)</h3>
+          <canvas id="chart-ttft"></canvas>
+        </div>
+      </div>
+
+      <!-- ── Config editor ──────────────────────────────────────────────────── -->
+      <h2>Configuration</h2>
+      <div class="card" style="margin-bottom:14px">
+        <form id="cfg-form" onsubmit="saveConfig(event)">
+          <div class="cfg-grid" id="cfg-fields">
+            <!-- populated by loadConfig() -->
+          </div>
+          <div class="cfg-actions">
+            <button type="submit" class="btn btn-save">Save Config</button>
+            <button type="button" class="btn" style="background:#1a274d;color:var(--muted)"
+                    onclick="loadConfig()">Reload</button>
+            <span id="cfg-msg"></span>
+          </div>
+        </form>
+      </div>
+
+    </div><!-- .wrap -->
 
     <script>
-      function pressure_label(v) {
-        if (v >= 0.75) return ["high", "bad"];
-        if (v <= 0.35) return ["low", "good"];
-        return ["moderate", "warn"];
-      }
+    "use strict";
 
-      function fmt(v, digits) {
-        if (v === null || v === undefined) return "—";
-        if (typeof v === "number") return v.toFixed(digits ?? 3);
-        return String(v);
-      }
+    // ── Constants ──────────────────────────────────────────────────────────────
+    const MAX_HIST = 60;
+    const POLL_MS  = 3000;
 
-      async function tick() {
-        let d;
-        try {
-          const r = await fetch("/serving/snapshot");
-          d = await r.json();
-        } catch (e) {
-          document.getElementById("raw").textContent = "fetch error: " + e;
-          return;
+    // Rolling history buffers
+    const hist = {
+      labels:      [],
+      sat:         [],
+      queue:       [],
+      cache:       [],
+      lat:         [],
+      tgt_rep:     [],
+      rdy_rep:     [],
+      ttft:        [],
+    };
+
+    // ── Utility ────────────────────────────────────────────────────────────────
+    function fmt(v, d = 3) {
+      if (v === null || v === undefined) return "—";
+      if (typeof v === "number") return v.toFixed(d);
+      return String(v);
+    }
+
+    function pressureClass(v) {
+      if (v >= 0.75) return ["high",     "badge-bad"];
+      if (v <= 0.35) return ["low",      "badge-good"];
+      return              ["moderate", "badge-warn"];
+    }
+
+    function badge(text, cls) {
+      return `<span class="badge ${cls}">${text}</span>`;
+    }
+
+    function push(arr, val) {
+      arr.push(val);
+      if (arr.length > MAX_HIST) arr.shift();
+    }
+
+    // ── SVG arc gauge ──────────────────────────────────────────────────────────
+    // Semi-circle: center (90,98), radius 83, from left (7,98) to right (173,98).
+    // Saturation 0→1 maps to arc from left (angle=π) sweeping CCW toward right (angle=0).
+    const CX = 90, CY = 98, R = 83;
+
+    function arcPoint(sat) {
+      const a = Math.PI * (1 - Math.max(0, Math.min(0.9999, sat)));
+      return [CX + R * Math.cos(a), CY - R * Math.sin(a)];
+    }
+
+    function arcPath(sat) {
+      if (sat < 0.005) return "";
+      const [ex, ey] = arcPoint(sat);
+      const large = sat > 0.5 ? 1 : 0;
+      return `M ${CX - R} ${CY} A ${R} ${R} 0 ${large} 0 ${ex.toFixed(2)} ${ey.toFixed(2)}`;
+    }
+
+    function thresholdDot(sat, id) {
+      const [x, y] = arcPoint(sat);
+      const el = document.getElementById(id);
+      if (el) { el.setAttribute("cx", x.toFixed(2)); el.setAttribute("cy", y.toFixed(2)); }
+    }
+
+    function updateGauge(sat, pHigh, pLow) {
+      const arc   = document.getElementById("sat-arc");
+      const num   = document.getElementById("sat-num");
+      const label = document.getElementById("sat-label");
+      const bwrap = document.getElementById("sat-badge-wrap");
+
+      let color, text, bcls;
+      if (sat >= pHigh)      { color = "#ff6b6b"; text = "HIGH — scale out"; bcls = "badge-bad"; }
+      else if (sat <= pLow)  { color = "#29d391"; text = "LOW — scale in";   bcls = "badge-good"; }
+      else                   { color = "#f4c95d"; text = "Moderate — hold";  bcls = "badge-warn"; }
+
+      if (arc) {
+        arc.setAttribute("d", arcPath(sat));
+        arc.setAttribute("stroke", color);
+      }
+      if (num)   num.textContent   = sat.toFixed(3);
+      if (label) label.textContent = text;
+      if (bwrap) bwrap.innerHTML   = badge(sat >= pHigh ? "scale out" : sat <= pLow ? "scale in" : "hold", bcls);
+
+      // Move threshold dots
+      thresholdDot(pLow,  "thr-low-dot");
+      thresholdDot(pHigh, "thr-high-dot");
+      document.getElementById("thr-low-val").textContent  = pLow.toFixed(2);
+      document.getElementById("thr-high-val").textContent = pHigh.toFixed(2);
+    }
+
+    // ── Metric cards ───────────────────────────────────────────────────────────
+    function renderCards(snap, gauges) {
+      const s = snap;
+      const cards = [
+        ["Waiting",         fmt(s.requests_waiting, 0),   s.requests_waiting > 10 ? "bad" : null],
+        ["Running",         fmt(s.requests_running, 0),   null],
+        ["Swapped",         fmt(s.requests_swapped, 0),   s.requests_swapped > 0 ? "bad" : "good"],
+        ["KV Cache",        fmt(s.kv_cache_usage_perc * 100, 1) + "%",
+                            s.kv_cache_usage_perc > 0.8 ? "bad" : s.kv_cache_usage_perc > 0.6 ? "warn" : null],
+        ["Ready Replicas",  fmt(s.ready_replicas, 0),     null],
+        ["Target Replicas", fmt(gauges.kube_ai_target_replicas, 0), null],
+        ["target max_seqs", fmt(gauges.kube_ai_target_max_num_seqs, 0), null],
+        ["p95 TTFT",        fmt(s.p95_ttft_sec, 3) + " s", null],
+      ];
+
+      document.getElementById("metric-cards").innerHTML = cards.map(([k, v, cls]) => {
+        const badgeHtml = cls ? badge(cls, `badge-${cls}`) : "";
+        return `<div class="card"><div class="k">${k}</div>
+                <div class="v v-sm">${v}</div>${badgeHtml}</div>`;
+      }).join("");
+    }
+
+    // ── Sub-scores ─────────────────────────────────────────────────────────────
+    function renderSubScores(snap) {
+      const pairs = [
+        ["sq", "sq-badge", snap.queue_pressure],
+        ["sc", "sc-badge", snap.cache_pressure],
+        ["sl", "sl-badge", snap.latency_pressure],
+      ];
+      for (const [vid, bid, val] of pairs) {
+        document.getElementById(vid).textContent = fmt(val);
+        const [txt, cls] = pressureClass(val);
+        document.getElementById(bid).innerHTML = badge(txt, cls);
+      }
+    }
+
+    // ── Charts ─────────────────────────────────────────────────────────────────
+    let chartSat, chartRep, chartTtft;
+    const CHART_DEFAULTS = {
+      responsive: true,
+      animation:  { duration: 200 },
+      plugins:    { legend: { labels: { color: "#9fb2de", boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: "#4c6090", maxTicksLimit: 8, font: { size: 10 } },
+             grid:  { color: "#1a2a50" } },
+        y: { ticks: { color: "#4c6090", font: { size: 10 } },
+             grid:  { color: "#1a2a50" } },
+      },
+    };
+
+    function makeLineDs(label, color, data) {
+      return { label, borderColor: color, backgroundColor: color + "30",
+               data, tension: 0.3, pointRadius: 2, fill: false };
+    }
+
+    function initCharts() {
+      const ctx1 = document.getElementById("chart-sat").getContext("2d");
+      chartSat = new Chart(ctx1, {
+        type: "line",
+        data: { labels: hist.labels, datasets: [
+          makeLineDs("saturation",      "#4c8ef5", hist.sat),
+          makeLineDs("queue pressure",  "#f4c95d", hist.queue),
+          makeLineDs("cache pressure",  "#ff9f40", hist.cache),
+          makeLineDs("latency pressure","#ff6b6b", hist.lat),
+        ]},
+        options: { ...CHART_DEFAULTS, scales: {
+          ...CHART_DEFAULTS.scales,
+          y: { ...CHART_DEFAULTS.scales.y, min: 0, max: 1 },
+        }},
+      });
+
+      const ctx2 = document.getElementById("chart-rep").getContext("2d");
+      chartRep = new Chart(ctx2, {
+        type: "line",
+        data: { labels: hist.labels, datasets: [
+          makeLineDs("target replicas", "#4c8ef5", hist.tgt_rep),
+          makeLineDs("ready replicas",  "#29d391", hist.rdy_rep),
+        ]},
+        options: { ...CHART_DEFAULTS, scales: {
+          ...CHART_DEFAULTS.scales,
+          y: { ...CHART_DEFAULTS.scales.y, min: 0 },
+        }},
+      });
+
+      const ctx3 = document.getElementById("chart-ttft").getContext("2d");
+      chartTtft = new Chart(ctx3, {
+        type: "line",
+        data: { labels: hist.labels, datasets: [
+          makeLineDs("p95 TTFT (s)", "#9b59b6", hist.ttft),
+        ]},
+        options: { ...CHART_DEFAULTS, scales: {
+          ...CHART_DEFAULTS.scales,
+          y: { ...CHART_DEFAULTS.scales.y, min: 0 },
+        }},
+      });
+    }
+
+    function updateCharts(snap, gauges) {
+      const ts = new Date().toLocaleTimeString();
+      push(hist.labels,  ts);
+      push(hist.sat,     snap.queue_pressure * 0.5 + snap.cache_pressure * 0.3 + snap.latency_pressure * 0.2);
+      push(hist.queue,   snap.queue_pressure);
+      push(hist.cache,   snap.cache_pressure);
+      push(hist.lat,     snap.latency_pressure);
+      push(hist.tgt_rep, gauges.kube_ai_target_replicas);
+      push(hist.rdy_rep, snap.ready_replicas);
+      push(hist.ttft,    snap.p95_ttft_sec);
+
+      chartSat.update("none");
+      chartRep.update("none");
+      chartTtft.update("none");
+    }
+
+    // ── Main poll ──────────────────────────────────────────────────────────────
+    async function tick() {
+      let d;
+      try {
+        const r = await fetch("/api/state");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        d = await r.json();
+      } catch (e) {
+        document.getElementById("fetch-err").textContent = "⚠ fetch error: " + e;
+        return;
+      }
+      document.getElementById("fetch-err").textContent = "";
+
+      const snap   = d.snapshot;
+      const gauges = d.gauges;
+      const cs     = d.config_summary;
+
+      const sat = snap.queue_pressure * 0.5 + snap.cache_pressure * 0.3 + snap.latency_pressure * 0.2;
+      updateGauge(sat, cs.pressure_high, cs.pressure_low);
+      renderSubScores(snap);
+      renderCards(snap, gauges);
+      updateCharts(snap, gauges);
+
+      document.getElementById("tune-mode-disp").textContent = cs.tune_mode;
+      document.getElementById("dry-run-disp").textContent   = cs.dry_run ? "true" : "false";
+    }
+
+    // ── Loop control ───────────────────────────────────────────────────────────
+    async function refreshLoopStatus() {
+      try {
+        const r = await fetch("/api/control/status");
+        const d = await r.json();
+        const el = document.getElementById("loop-badge");
+        const pid = document.getElementById("loop-pid");
+        if (d.running) {
+          el.className  = "badge badge-good";
+          el.textContent = "loop: running";
+          pid.textContent = d.pid ? `pid ${d.pid}` : "";
+        } else {
+          el.className  = "badge badge-off";
+          el.textContent = "loop: stopped";
+          pid.textContent = "";
         }
+      } catch (_) { /* ignore */ }
+    }
 
-        const sat = d.queue_pressure * 0.5 + d.cache_pressure * 0.3 + d.latency_pressure * 0.2;
-        const [stxt, scls] = pressure_label(sat);
-
-        const cards = [
-          ["Requests Waiting",   fmt(d.requests_waiting, 0), null],
-          ["Requests Running",   fmt(d.requests_running, 0), null],
-          ["Requests Swapped",   fmt(d.requests_swapped, 0), d.requests_swapped > 0 ? "bad" : "good"],
-          ["KV Cache Usage",     fmt(d.kv_cache_usage_perc), "cache_pressure"],
-          ["Queue Pressure",     fmt(d.queue_pressure), "queue_pressure"],
-          ["Latency Pressure",   fmt(d.latency_pressure), "latency_pressure"],
-          ["Saturation",         fmt(sat), "saturation"],
-          ["p95 TTFT (s)",       fmt(d.p95_ttft_sec), null],
-          ["Ready Replicas",     fmt(d.ready_replicas, 0) + " / " + fmt(d.desired_replicas, 0), null],
-          ["max_num_seqs",       fmt(d.current_max_num_seqs, 0), null],
-        ];
-
-        document.getElementById("cards").innerHTML = cards
-          .map(([k, v, cls_or_field]) => {
-            let badge = "";
-            if (cls_or_field === "saturation") {
-              badge = `<span class="status ${scls}">${stxt}</span>`;
-            } else if (cls_or_field === "queue_pressure" || cls_or_field === "cache_pressure" || cls_or_field === "latency_pressure") {
-              const fval = parseFloat(v);
-              const [t, c] = pressure_label(fval);
-              badge = `<span class="status ${c}">${t}</span>`;
-            } else if (cls_or_field === "good" || cls_or_field === "bad") {
-              badge = `<span class="status ${cls_or_field}">${cls_or_field}</span>`;
-            }
-            return `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${badge}</div>`;
-          })
-          .join("");
-
-        document.getElementById("raw").textContent = JSON.stringify(d, null, 2);
+    async function loopAction(action) {
+      try {
+        await fetch(`/api/control/${action}`, { method: "POST" });
+        await refreshLoopStatus();
+      } catch (e) {
+        document.getElementById("fetch-err").textContent = `Loop ${action} failed: ` + e;
       }
+    }
 
-      tick();
-      setInterval(tick, 5000);
+    // ── Config editor ──────────────────────────────────────────────────────────
+    const CFG_META = [
+      { key: "tune_mode",        label: "Tune Mode",           type: "select",
+        opts: ["both","replicas","params"] },
+      { key: "vllm_mode",        label: "vLLM Mode",           type: "select",
+        opts: ["mock","real"] },
+      { key: "tuner_kind",       label: "Tuner Kind",          type: "select",
+        opts: ["aimd","rl"] },
+      { key: "dry_run",          label: "Dry Run",             type: "select",
+        opts: ["true","false"] },
+      { key: "min_replicas",     label: "Min Replicas",        type: "number", step: 1 },
+      { key: "max_replicas",     label: "Max Replicas",        type: "number", step: 1 },
+      { key: "min_max_num_seqs", label: "Min max_num_seqs",    type: "number", step: 1 },
+      { key: "max_max_num_seqs", label: "Max max_num_seqs",    type: "number", step: 1 },
+      { key: "pressure_high",    label: "Pressure High",       type: "number", step: 0.01 },
+      { key: "pressure_low",     label: "Pressure Low",        type: "number", step: 0.01 },
+      { key: "ttft_slo_sec",     label: "TTFT SLO (s)",        type: "number", step: 0.1 },
+      { key: "cooldown_sec",     label: "Cooldown (s)",        type: "number", step: 1 },
+      { key: "param_cooldown_sec",label:"Param Cooldown (s)",  type: "number", step: 1 },
+      { key: "interval_sec",     label: "Interval (s)",        type: "number", step: 1 },
+    ];
+
+    function buildCfgFields(cfg) {
+      const grid = document.getElementById("cfg-fields");
+      grid.innerHTML = CFG_META.map(m => {
+        const val = cfg[m.key];
+        let input;
+        if (m.type === "select") {
+          const ops = m.opts.map(o => {
+            const strVal = String(val);
+            const sel = (o === strVal || (m.key === "dry_run" && o === String(val))) ? " selected" : "";
+            return `<option value="${o}"${sel}>${o}</option>`;
+          }).join("");
+          input = `<select id="cfg-${m.key}" name="${m.key}">${ops}</select>`;
+        } else {
+          input = `<input id="cfg-${m.key}" name="${m.key}" type="${m.type}"
+                          step="${m.step ?? 1}" value="${val ?? ""}">`;
+        }
+        return `<div class="cfg-field"><label for="cfg-${m.key}">${m.label}</label>${input}</div>`;
+      }).join("");
+    }
+
+    async function loadConfig() {
+      try {
+        const r   = await fetch("/api/config");
+        const cfg = await r.json();
+        buildCfgFields(cfg);
+        document.getElementById("cfg-msg").textContent = "";
+      } catch (e) {
+        document.getElementById("cfg-msg").innerHTML =
+          `<span class="cfg-err">Load failed: ${e}</span>`;
+      }
+    }
+
+    async function saveConfig(ev) {
+      ev.preventDefault();
+      const form = document.getElementById("cfg-form");
+      const data = {};
+      for (const m of CFG_META) {
+        const el = form.elements[m.key];
+        if (!el) continue;
+        let v = el.value.trim();
+        if (v === "") continue;
+        if (m.key === "dry_run") { data[m.key] = v === "true"; }
+        else if (m.type === "number") { data[m.key] = Number(v); }
+        else { data[m.key] = v; }
+      }
+      const msg = document.getElementById("cfg-msg");
+      try {
+        const r = await fetch("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+        const body = await r.json();
+        if (r.ok) {
+          msg.innerHTML = `<span class="cfg-ok">Saved ✓</span>`;
+        } else {
+          const detail = body.detail ?? JSON.stringify(body);
+          msg.innerHTML = `<span class="cfg-err">Error: ${detail}</span>`;
+        }
+      } catch (e) {
+        msg.innerHTML = `<span class="cfg-err">Save failed: ${e}</span>`;
+      }
+    }
+
+    // ── Bootstrap ──────────────────────────────────────────────────────────────
+    initCharts();
+    loadConfig();
+    refreshLoopStatus();
+    tick();
+    setInterval(tick, POLL_MS);
+    setInterval(refreshLoopStatus, 10000);
     </script>
   </body>
 </html>
