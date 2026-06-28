@@ -191,8 +191,11 @@ Environment overrides YAML; YAML overrides hardcoded defaults.
   neither path can change faster than its configured minimum interval.
 - **State advances only on success.** Actuator internal state (`current_replicas`,
   `current_max_num_seqs`) is updated only when `kubectl` returns `ok=True`.
-- **Injection-safe kubectl.** All deployment and namespace values are passed through
-  `shlex.quote()` before shell expansion; commands are built as lists (no shell=True).
+- **Injection-safe kubectl.** The kubectl invocation uses `shell=True` (required for SSH and
+  docker exec modes that wrap the command as a quoted shell string), but every interpolated
+  value — deployment name, namespace, SSH host/user, docker container — is individually
+  `shlex.quote()`-escaped before insertion, making injection effectively impossible under
+  correct usage.
 - **Args-preserving patch.** `kubectl patch` reads the live container args, removes only the
   `--max-num-seqs=N` token, and writes back all other args untouched.
 - **No destructive operations.** The controller never deletes pods, PVCs, or namespaces.
@@ -236,6 +239,30 @@ atomically to `models/qtable.json`.
 - `docs/PRODUCTION_READINESS.md` — production checklist and go-live guide for real vLLM on GPU
 - `docs/RESEARCH_NOTES.md` — vLLM metric names, paper attributions
 - `docs/ATTRIBUTION.md` — license attribution and acknowledgements
+
+---
+
+## Security
+
+> **kube-ai is an MVP/portfolio project. Read these notes before exposing it to any network.**
+
+- **No authentication.** The REST API (`/api/config`, `/api/control/start`, `/api/control/stop`,
+  and all GET endpoints) and the Web UI are **completely unauthenticated**. Any network-reachable
+  client can read full system state, write `config.yaml`, and start/stop the control loop.
+  RBAC is a documented post-MVP item (`# RBAC TODO` hooks are in place throughout the API).
+  Do **not** expose port 8080 on an untrusted network without an auth proxy in front.
+- **Grafana default credentials.** The sandbox `docker-compose.yml` ships with
+  `admin` / `admin`. Change these before any real (non-local) deployment.
+- **Controller dry-run default.** `dry_run=true` by default — kubectl is never called unless
+  explicitly overridden. Start in dry-run, verify logs look correct, then enable live mutations.
+- **SSRF consideration.** The controller fetches `vllm_metrics_url` with `urllib.request.urlopen`.
+  This URL is **not** settable via the REST API (it is not in the whitelist); it can only be
+  changed via `config.yaml` or the `VLLM_METRICS_URL` env var, both of which require local
+  access. No URL scheme validation is performed — keep `config.yaml` access-controlled.
+- **shell=True with shlex.quote().** The kubectl runner uses `shell=True` (architecturally
+  required for SSH/docker modes). All user-supplied values are individually
+  `shlex.quote()`-escaped; do not pass raw user input from the network directly to
+  `ControllerConfig` fields that feed into kubectl commands.
 
 ---
 

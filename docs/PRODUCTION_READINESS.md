@@ -55,7 +55,7 @@ Medium and Low quick-fixes (M1, M2, L1, L3) also applied.
 
 | Item | Severity | Status |
 |------|----------|--------|
-| Real vLLM on GPU hosts (a dedicated GPU host / a CPU-heavy host with small GPU) not exercised | Medium | Deferred — mock-vLLM used for all e2e; go-live checklist below |
+| Real vLLM on GPU hosts (a dedicated GPU host / a CPU-heavy host with a small GPU) not exercised | Medium | Deferred — mock-vLLM used for all e2e; go-live checklist below |
 | RBAC on config UI endpoints | Medium | Deferred — `# RBAC TODO` hooks in place at every new endpoint |
 | M3: `_gauge_val` uses private prometheus `_value.get()` API | Medium | Deferred — requires prometheus_client refactor when version pinned |
 | M4: E2E_RESULTS.md clarification (the doc now contains full verdicts) | Low | Resolved by this release |
@@ -66,14 +66,14 @@ Reference: `docs/MORNING_REVIEW.md` for full deferred-item rationale.
 
 ---
 
-## GO-LIVE CHECKLIST — pointing at real vLLM on <gpu-host>
+## GO-LIVE CHECKLIST — pointing at real vLLM on a GPU host
 
 Follow these steps to switch from mock-vLLM to a real vLLM GPU host.
 
 ### 1. Build and start vLLM on the GPU host
 
 ```bash
-# On <gpu-host> (GPU) — adjust model as needed
+# On <gpu-host> (a dedicated GPU node, e.g. NVIDIA RTX-class) — adjust model as needed
 docker run --gpus all -p 8000:8000 \
   vllm/vllm-openai:latest \
   --model mistralai/Mistral-7B-v0.1 \
