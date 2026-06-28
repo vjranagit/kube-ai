@@ -20,6 +20,29 @@ from controller.tests.conftest import (
     make_cfg,
 )
 
+# Deployment JSON that includes a container with --max-num-seqs in args.
+_DEPLOYMENT_JSON_WITH_MAX_NUM_SEQS = json.dumps(
+    {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "vllm-server", "namespace": "default"},
+        "spec": {
+            "replicas": 3,
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "vllm-server",
+                            "args": ["--max-num-seqs=512"],
+                        }
+                    ]
+                }
+            },
+        },
+        "status": {"replicas": 3, "readyReplicas": 3, "availableReplicas": 3},
+    }
+)
+
 
 # ---------------------------------------------------------------------------
 # _parse_vllm_metrics — gauge values
@@ -303,3 +326,87 @@ def test_snapshot_pressure_scores_initialised_to_zero() -> None:
     assert snap.queue_pressure == pytest.approx(0.0)
     assert snap.cache_pressure == pytest.approx(0.0)
     assert snap.latency_pressure == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# _parse_max_num_seqs — live Deployment container args
+# ---------------------------------------------------------------------------
+
+
+def test_parse_max_num_seqs_extracts_value() -> None:
+    """Parses --max-num-seqs=N from container args and returns int."""
+    result = K8sCollector._parse_max_num_seqs(_DEPLOYMENT_JSON_WITH_MAX_NUM_SEQS)
+    assert result == 512
+
+
+def test_parse_max_num_seqs_missing_arg_returns_none() -> None:
+    """Returns None when no container has --max-num-seqs in args."""
+    result = K8sCollector._parse_max_num_seqs(MOCK_DEPLOYMENT_JSON)
+    assert result is None
+
+
+def test_parse_max_num_seqs_malformed_json_returns_none() -> None:
+    result = K8sCollector._parse_max_num_seqs("{invalid}")
+    assert result is None
+
+
+def test_parse_max_num_seqs_empty_containers_returns_none() -> None:
+    js = json.dumps({"spec": {"template": {"spec": {"containers": []}}}})
+    result = K8sCollector._parse_max_num_seqs(js)
+    assert result is None
+
+
+def test_parse_max_num_seqs_empty_string_returns_none() -> None:
+    result = K8sCollector._parse_max_num_seqs("")
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# snapshot() current_max_num_seqs — real mode uses live args; mock uses cfg
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_real_mode_reads_max_num_seqs_from_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """current_max_num_seqs is read from Deployment container args in real mode."""
+    server = MockMetricsServer(VLLM_METRICS_TYPICAL)
+    try:
+        cfg = make_cfg(vllm_mode="real", vllm_metrics_url=server.url, min_max_num_seqs=128)
+        collector = K8sCollector(cfg)
+        monkeypatch.setattr(
+            collector.runner,
+            "run",
+            lambda cmd, check=True: (True, _DEPLOYMENT_JSON_WITH_MAX_NUM_SEQS),
+        )
+        snap = collector.snapshot()
+        assert snap.current_max_num_seqs == 512
+    finally:
+        server.close()
+
+
+def test_snapshot_real_mode_falls_back_to_cfg_when_arg_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Falls back to cfg.min_max_num_seqs when Deployment has no --max-num-seqs arg."""
+    server = MockMetricsServer(VLLM_METRICS_TYPICAL)
+    try:
+        cfg = make_cfg(vllm_mode="real", vllm_metrics_url=server.url, min_max_num_seqs=256)
+        collector = K8sCollector(cfg)
+        monkeypatch.setattr(
+            collector.runner,
+            "run",
+            lambda cmd, check=True: (True, MOCK_DEPLOYMENT_JSON),
+        )
+        snap = collector.snapshot()
+        assert snap.current_max_num_seqs == 256
+    finally:
+        server.close()
+
+
+def test_snapshot_mock_mode_uses_cfg_min_max_num_seqs() -> None:
+    """In mock mode current_max_num_seqs always equals cfg.min_max_num_seqs."""
+    cfg = make_cfg(vllm_mode="mock", min_max_num_seqs=384)
+    collector = K8sCollector(cfg)
+    snap = collector.snapshot()
+    assert snap.current_max_num_seqs == 384

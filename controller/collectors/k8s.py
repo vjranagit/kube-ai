@@ -242,6 +242,31 @@ class K8sCollector:
             return "{}"
         return out
 
+    @staticmethod
+    def _parse_max_num_seqs(deployment_json: str) -> int | None:
+        """Extract --max-num-seqs=N from Deployment container args.
+
+        Returns None if the arg is absent (caller should fall back to config default).
+        """
+        try:
+            data = json.loads(deployment_json)
+        except json.JSONDecodeError:
+            return None
+        containers = (
+            data.get("spec", {})
+            .get("template", {})
+            .get("spec", {})
+            .get("containers", [])
+        )
+        for container in containers:
+            for arg in container.get("args", []):
+                if arg.startswith("--max-num-seqs="):
+                    try:
+                        return int(arg.split("=", 1)[1])
+                    except ValueError:
+                        pass
+        return None
+
     # ------------------------------------------------------------------
     # Snapshot assembly
     # ------------------------------------------------------------------
@@ -259,6 +284,14 @@ class K8sCollector:
         vllm = _parse_vllm_metrics(metrics_text)
         dep = _parse_deployment_json(deployment_json)
 
+        # Prefer the live --max-num-seqs arg from Deployment container args; fall back
+        # to cfg.min_max_num_seqs so mock/offline mode still works.
+        if self.cfg.vllm_mode == "mock":
+            current_max_num_seqs = self.cfg.min_max_num_seqs
+        else:
+            parsed_seqs = self._parse_max_num_seqs(deployment_json)
+            current_max_num_seqs = parsed_seqs if parsed_seqs is not None else self.cfg.min_max_num_seqs
+
         return ServingSnapshot(
             timestamp=datetime.now(timezone.utc),
             desired_replicas=dep["desired_replicas"],
@@ -275,7 +308,7 @@ class K8sCollector:
             queue_pressure=0.0,
             cache_pressure=0.0,
             latency_pressure=0.0,
-            current_max_num_seqs=self.cfg.min_max_num_seqs,
+            current_max_num_seqs=current_max_num_seqs,
             metrics_available=metrics_available,
         )
 

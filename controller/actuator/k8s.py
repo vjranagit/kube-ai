@@ -53,10 +53,33 @@ class K8sActuator:
                 docker_container=cfg.docker_container,
             )
         )
+        # Sync initial state from the live Deployment so that scale-in AIMD
+        # correctly halves from the actual running replica count, not from 1.
+        self._sync_initial_state()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _sync_initial_state(self) -> None:
+        """Read current Deployment replica count from the cluster and sync state.
+
+        Skips silently if the cluster is unreachable (state keeps the safe default of 1).
+        Only syncs replicas; max_num_seqs is left at cfg.min_max_num_seqs because
+        the collector already parses it from container args when needed.
+        """
+        dep = self.cfg.vllm_deployment
+        ns = self.cfg.vllm_namespace
+        cmd = f"get deployment {dep} --namespace {ns} -o jsonpath={{.spec.replicas}}"
+        try:
+            ok, out = self.runner.run(cmd, check=False)
+            if ok and out.strip().isdigit():
+                live = int(out.strip())
+                clamped = max(self.cfg.min_replicas, min(self.cfg.max_replicas, live))
+                self.state.current_replicas = clamped
+                LOG.info("actuator initial replicas synced from cluster: %d", clamped)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("failed to sync initial replicas from cluster: %s", exc)
 
     def _scale_cmd(self, n: int) -> str:
         dep = self.cfg.vllm_deployment
