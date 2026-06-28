@@ -24,3 +24,9 @@ Added a comprehensive pytest suite under `controller/tests/` mirroring the slurm
 ### Bugs found and fixed
 None found in controller code. All modules matched their documented contracts exactly.
 `ruff check .` passes with no issues.
+
+## 2026-06-28 — Build wave (sandbox, UI, RL)
+- feat(sandbox) b1a409e: kind + mock-vLLM (real vllm:* metrics) + k8s manifests + Prometheus/Grafana + scripts. deployment/container=vllm-server, ns=kube-ai, NodePort 30080.
+- feat(ui) 1dfd9e1: Chart.js live dashboard + config editor + loop start/stop; 65 api+ui tests green.
+- feat(tuner) 36f22bb: tabular Q-learning RLTuner (replicas + max_num_seqs) + ServingSimulator + training; qtable tracked. Full suite 286 passing.
+- Next: kind e2e + stress + benchmark, then audit + gap passes.
