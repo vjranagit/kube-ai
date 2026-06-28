@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+  namespace: kube-ai
+  labels:
+    app: vllm-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-server
+  template:
+    metadata:
+      labels:
+        app: vllm-server
+    spec:
+      containers:
+        # IMPORTANT: container name MUST equal the deployment name ("vllm-server").
+        # The K8sActuator._patch_cmd() uses cfg.vllm_deployment as containers[].name
+        # when issuing strategic-merge patches to update --max-num-seqs.
+        - name: vllm-server
+          image: mock-vllm:latest
+          imagePullPolicy: Never   # image is loaded into kind via `kind load`
+          args:
+            - "--max-num-seqs=256"
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: PORT
+              value: "8000"
+            - name: MOCK_REPLICAS
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.replicas
+            - name: MODEL_NAME
+              value: "mistral"
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10

@@ -1,0 +1,49 @@
+# sandbox.config.yaml — ready-to-use config for the local kind sandbox.
+# Copy or symlink to config.yaml at the repo root before starting the controller:
+#   cp infra/sandbox.config.yaml config.yaml
+# Or point the env var:
+#   KUBE_AI_CONFIG=infra/sandbox.config.yaml python -m controller.main ...
+
+# --- Control loop ---
+tune_mode: both          # exercise both replica scaling and param patching
+interval_sec: 10         # fast iteration for sandbox observation
+cooldown_sec: 20         # reduced cooldown for faster e2e testing
+param_cooldown_sec: 60   # reduced param cooldown for sandbox
+dry_run: false           # must be false to actually scale the kind cluster
+
+# --- Replica bounds ---
+min_replicas: 1
+max_replicas: 4          # keep small for the single-node kind cluster
+
+# --- max-num-seqs bounds ---
+min_max_num_seqs: 128
+max_max_num_seqs: 1024
+
+# --- Saturation thresholds ---
+pressure_high: 0.75
+pressure_low: 0.35
+
+# --- Latency SLO ---
+ttft_slo_sec: 2.0
+
+# --- Deployment target ---
+# vllm_deployment MUST match both the Deployment name and the container name
+# in infra/k8s/mock-vllm-deployment.yaml (actuator._patch_cmd uses containers[].name = vllm_deployment).
+vllm_deployment: vllm-server
+vllm_namespace: kube-ai   # matches infra/k8s/namespace.yaml
+
+# --- vLLM metrics ---
+vllm_mode: real
+# Host-side URL via kind NodePort mapped at infra/kind/cluster.yaml extraPortMappings
+vllm_metrics_url: "http://localhost:30080/metrics"
+
+# --- kubectl execution mode ---
+exec_mode: local
+context: "kind-kube-ai"   # kubectl context created by `kind create cluster --name kube-ai`
+namespace: kube-ai
+
+# --- Tuner ---
+tuner_kind: aimd
+
+# --- Observability ---
+metrics_port: 9108   # controller exposes Prometheus metrics on this port (scraped by docker-compose Prometheus)

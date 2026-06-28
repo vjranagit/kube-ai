@@ -1,0 +1,32 @@
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: kube-ai-prometheus
+    # extra_hosts lets the container resolve host.docker.internal → host gateway,
+    # enabling Prometheus to scrape the host-side controller (:9108) and the
+    # kind NodePort (:30080) that is bound on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    container_name: kube-ai-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/kube-ai.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped

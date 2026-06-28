@@ -1,0 +1,185 @@
+{
+  "id": null,
+  "uid": "kube-ai-sandbox",
+  "title": "kube-ai Controller",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {"from": "now-30m", "to": "now"},
+  "templating": {"list": []},
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Saturation Score + Thresholds",
+      "description": "Composite saturation [0..1] with scale-out (0.75) and scale-in (0.35) threshold lines.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit"
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "pressure_high"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [8, 4]}},
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "pressure_low"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [8, 4]}},
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "kube_ai_saturation_score",
+          "legendFormat": "saturation",
+          "refId": "A"
+        },
+        {
+          "expr": "0.75 + 0 * kube_ai_saturation_score",
+          "legendFormat": "pressure_high",
+          "refId": "B"
+        },
+        {
+          "expr": "0.35 + 0 * kube_ai_saturation_score",
+          "legendFormat": "pressure_low",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Pressure Sub-Scores",
+      "description": "Individual contributions: queue (50%), cache (30%), latency (20%).",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {
+        "defaults": {"min": 0, "max": 1, "unit": "percentunit"}
+      },
+      "targets": [
+        {"expr": "kube_ai_queue_pressure",   "legendFormat": "queue_pressure",   "refId": "A"},
+        {"expr": "kube_ai_cache_pressure",   "legendFormat": "cache_pressure",   "refId": "B"},
+        {"expr": "kube_ai_latency_pressure", "legendFormat": "latency_pressure", "refId": "C"}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "vLLM Request Queue (waiting / running / swapped)",
+      "description": "Raw request counts from mock-vllm /metrics.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "vllm:num_requests_waiting",
+          "legendFormat": "waiting",
+          "refId": "A"
+        },
+        {
+          "expr": "vllm:num_requests_running",
+          "legendFormat": "running",
+          "refId": "B"
+        },
+        {
+          "expr": "vllm:num_requests_swapped",
+          "legendFormat": "swapped",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "KV Cache Utilisation",
+      "description": "vllm:kv_cache_usage_perc — GPU KV cache fill [0..1].",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "fieldConfig": {
+        "defaults": {"min": 0, "max": 1, "unit": "percentunit"}
+      },
+      "targets": [
+        {
+          "expr": "vllm:kv_cache_usage_perc",
+          "legendFormat": "kv_cache",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Target vs Ready Replicas",
+      "description": "Controller target replica count versus Kubernetes-reported ready replicas.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "fieldConfig": {
+        "defaults": {"min": 0, "unit": "short", "decimals": 0}
+      },
+      "targets": [
+        {
+          "expr": "kube_ai_target_replicas",
+          "legendFormat": "target_replicas",
+          "refId": "A"
+        },
+        {
+          "expr": "kube_ai_ready_replicas",
+          "legendFormat": "ready_replicas",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "target_max_num_seqs",
+      "description": "Controller target for --max-num-seqs parameter patch.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "fieldConfig": {
+        "defaults": {"min": 0, "unit": "short", "decimals": 0}
+      },
+      "targets": [
+        {
+          "expr": "kube_ai_target_max_num_seqs",
+          "legendFormat": "target_max_num_seqs",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "p95 Time-To-First-Token (TTFT)",
+      "description": "Approximate p95 TTFT in seconds; SLO line at 2.0 s.",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+      "fieldConfig": {
+        "defaults": {"unit": "s"},
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "SLO (2s)"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [8, 4]}},
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "kube_ai_p95_ttft_sec",
+          "legendFormat": "p95_ttft",
+          "refId": "A"
+        },
+        {
+          "expr": "2.0 + 0 * kube_ai_p95_ttft_sec",
+          "legendFormat": "SLO (2s)",
+          "refId": "B"
+        }
+      ]
+    }
+  ]
+}

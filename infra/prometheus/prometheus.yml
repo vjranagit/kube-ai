@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Scrape the kube-ai controller process (Prometheus client on :9108)
+  - job_name: kube-ai-controller
+    static_configs:
+      - targets:
+          - "host.docker.internal:9108"
+
+  # Scrape the mock-vllm Prometheus endpoint via the kind NodePort bound on the host
+  - job_name: mock-vllm
+    static_configs:
+      - targets:
+          - "host.docker.internal:30080"
+    metrics_path: /metrics

@@ -1,0 +1,45 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: controller
+  namespace: kube-ai
+  labels:
+    app.kubernetes.io/component: controller
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: controller
+  namespace: kube-ai
+  labels:
+    app.kubernetes.io/component: controller
+rules:
+  # Allow the controller to read and scale deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch", "update"]
+  # Allow reading pod status (for ready replica count)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Allow reading services (for debugging / discovery)
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: controller
+  namespace: kube-ai
+  labels:
+    app.kubernetes.io/component: controller
+subjects:
+  - kind: ServiceAccount
+    name: controller
+    namespace: kube-ai
+roleRef:
+  kind: Role
+  name: controller
+  apiGroup: rbac.authorization.k8s.io
