@@ -246,3 +246,85 @@ def test_default_min_max_num_seqs_less_than_max_max_num_seqs() -> None:
     mn = int(run_cfg_expr("cfg.min_max_num_seqs"))
     mx = int(run_cfg_expr("cfg.max_max_num_seqs"))
     assert mn < mx
+
+
+from controller.tests.conftest import make_cfg as _make_cfg  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# __post_init__ validation — C3 (min >= 1) and H5 (cross-field invariants)
+# ---------------------------------------------------------------------------
+
+
+def test_post_init_min_replicas_zero_raises() -> None:
+    """min_replicas=0 must raise ValueError with 'min_replicas' in message (C3)."""
+    with pytest.raises(ValueError, match="min_replicas"):
+        _make_cfg(min_replicas=0)
+
+
+def test_post_init_min_replicas_negative_raises() -> None:
+    """Negative min_replicas must raise ValueError (C3)."""
+    with pytest.raises(ValueError, match="min_replicas"):
+        _make_cfg(min_replicas=-1)
+
+
+def test_post_init_min_max_num_seqs_zero_raises() -> None:
+    """min_max_num_seqs=0 must raise ValueError (C3)."""
+    with pytest.raises(ValueError, match="min_max_num_seqs"):
+        _make_cfg(min_max_num_seqs=0)
+
+
+def test_post_init_pressure_low_equal_high_raises() -> None:
+    """pressure_low == pressure_high must raise ValueError (H5)."""
+    with pytest.raises(ValueError, match="pressure_low"):
+        _make_cfg(pressure_low=0.5, pressure_high=0.5)
+
+
+def test_post_init_pressure_low_greater_than_high_raises() -> None:
+    """pressure_low > pressure_high must raise ValueError (H5)."""
+    with pytest.raises(ValueError, match="pressure_low"):
+        _make_cfg(pressure_low=0.8, pressure_high=0.3)
+
+
+def test_post_init_min_replicas_greater_than_max_raises() -> None:
+    """min_replicas > max_replicas must raise ValueError (H5)."""
+    with pytest.raises(ValueError, match="min_replicas"):
+        _make_cfg(min_replicas=9, max_replicas=3)
+
+
+def test_post_init_min_max_num_seqs_greater_than_max_raises() -> None:
+    """min_max_num_seqs > max_max_num_seqs must raise ValueError (H5)."""
+    with pytest.raises(ValueError, match="min_max_num_seqs"):
+        _make_cfg(min_max_num_seqs=4096, max_max_num_seqs=2048)
+
+
+def test_post_init_interval_sec_zero_raises() -> None:
+    """interval_sec=0 must raise ValueError (H5)."""
+    with pytest.raises(ValueError, match="interval_sec"):
+        _make_cfg(interval_sec=0)
+
+
+def test_post_init_negative_cooldown_raises() -> None:
+    """Negative cooldown_sec must raise ValueError (H5)."""
+    with pytest.raises(ValueError, match="cooldown_sec"):
+        _make_cfg(cooldown_sec=-1)
+
+
+def test_post_init_negative_param_cooldown_raises() -> None:
+    """Negative param_cooldown_sec must raise ValueError (H5)."""
+    with pytest.raises(ValueError, match="param_cooldown_sec"):
+        _make_cfg(param_cooldown_sec=-5)
+
+
+def test_post_init_zero_cooldowns_allowed() -> None:
+    """cooldown_sec=0 and param_cooldown_sec=0 are valid (no cooldown mode)."""
+    cfg = _make_cfg(cooldown_sec=0, param_cooldown_sec=0)
+    assert cfg.cooldown_sec == 0
+    assert cfg.param_cooldown_sec == 0
+
+
+def test_post_init_valid_defaults_no_raise() -> None:
+    """Default configuration must pass __post_init__ without raising."""
+    cfg = _make_cfg()
+    assert cfg.min_replicas >= 1
+    assert cfg.pressure_low < cfg.pressure_high

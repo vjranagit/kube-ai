@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import urllib.request
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -232,13 +233,18 @@ class K8sCollector:
             return ""
 
     def _fetch_deployment_json(self) -> str:
-        """Run kubectl get deployment -o json; return raw JSON string."""
-        dep = self.cfg.vllm_deployment
-        ns = self.cfg.vllm_namespace
+        """Run kubectl get deployment -o json; return raw JSON string.
+
+        Deployment name and namespace are shlex-quoted to prevent shell injection (C2).
+        """
+        dep_raw = self.cfg.vllm_deployment
+        ns_raw = self.cfg.vllm_namespace
+        dep = shlex.quote(dep_raw)
+        ns = shlex.quote(ns_raw)
         cmd = f"get deployment {dep} --namespace {ns} -o json"
         ok, out = self.runner.run(cmd, check=False)
         if not ok:
-            LOG.warning("kubectl get deployment failed dep=%s err=%s", dep, out)
+            LOG.warning("kubectl get deployment failed dep=%s err=%s", dep_raw, out)
             return "{}"
         return out
 

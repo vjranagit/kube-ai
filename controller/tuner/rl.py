@@ -124,22 +124,39 @@ def _json_to_qt(data: dict[str, dict[str, list[float]]]) -> QTable:
 
 
 def save_qtable(qtables: dict[str, QTable], path: str) -> None:
-    """Persist both Q-tables to *path* as JSON, creating parent dirs as needed."""
+    """Persist both Q-tables to *path* as JSON, creating parent dirs as needed.
+
+    Writes to a temporary file first and then renames atomically (H6) so a
+    crash mid-write cannot corrupt the on-disk Q-table.
+    """
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
     data = {key: _qt_to_json(qt) for key, qt in qtables.items()}
-    with open(path, "w") as fh:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
         json.dump(data, fh, indent=2)
+    os.replace(tmp, path)  # atomic rename — no partial-write corruption
 
 
 def load_qtable(path: str) -> dict[str, QTable]:
-    """Load Q-tables from *path*.  Returns empty dict if file is missing/malformed."""
+    """Load Q-tables from *path*.  Returns empty dict if file is missing/malformed.
+
+    Handles any JSON content type that is not a dict (e.g. a top-level list)
+    without raising — returns {} instead.  Broadened from the original to catch
+    AttributeError / TypeError as well (C5).
+    """
     try:
         with open(path) as fh:
             raw = json.load(fh)
-        return {key: _json_to_qt(val) for key, val in raw.items()}
-    except (FileNotFoundError, ValueError, KeyError):
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            key: _json_to_qt(val)
+            for key, val in raw.items()
+            if isinstance(val, dict)
+        }
+    except Exception:  # noqa: BLE001
         return {}
 
 

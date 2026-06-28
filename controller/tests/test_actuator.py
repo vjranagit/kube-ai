@@ -1,6 +1,8 @@
 """Tests for actuator/k8s.py — apply(), dry_run, cooldown, bounds, changed flag, safety."""
 from __future__ import annotations
 
+import json
+import shlex
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -442,3 +444,214 @@ def test_sync_initial_state_runner_exception_does_not_propagate(
     cfg = make_cfg(min_replicas=2, max_replicas=8)
     actuator = K8sActuator(cfg)  # must not raise
     assert cfg.min_replicas <= actuator.state.current_replicas <= cfg.max_replicas
+
+
+# ---------------------------------------------------------------------------
+# C2 — Shell injection: deployment/namespace names must be shlex-quoted
+# ---------------------------------------------------------------------------
+
+
+def test_scale_cmd_quotes_metacharacter_deployment_name() -> None:
+    """Metacharacters in vllm_deployment are shlex-quoted in _scale_cmd (C2).
+
+    The shell-quoted form of the dangerous name must appear in the command so
+    that the shell treats it as a single argument, not as multiple tokens.
+    """
+    dangerous = "vllm; rm -rf /tmp/x"
+    cfg = make_cfg(vllm_deployment=dangerous, vllm_namespace="default")
+    actuator = K8sActuator(cfg)
+    cmd = actuator._scale_cmd(3)  # noqa: SLF001
+    # The properly shell-quoted form must be present (proves safe quoting)
+    assert shlex.quote(dangerous) in cmd
+
+
+def test_patch_cmd_quotes_metacharacter_namespace() -> None:
+    """Metacharacters in vllm_namespace are shlex-quoted in _patch_cmd (C2)."""
+    dangerous_ns = "default && cat /etc/passwd"
+    cfg = make_cfg(vllm_deployment="vllm-server", vllm_namespace=dangerous_ns)
+    actuator = K8sActuator(cfg)
+    cmd = actuator._patch_cmd(256, [])  # noqa: SLF001
+    # Shell-quoted form present → namespace is a single token, not split on &&
+    assert shlex.quote(dangerous_ns) in cmd
+
+
+# ---------------------------------------------------------------------------
+# C4 — Args-preserving patch: only --max-num-seqs changes, others survive
+# ---------------------------------------------------------------------------
+
+
+def _decode_patch_args(cmd: str) -> list[str]:
+    """Extract and decode the container args from a _patch_cmd output string."""
+    # The command is: ... -p <json-string-of-json>
+    p_idx = cmd.rindex(" -p ")
+    p_value = cmd[p_idx + 4:]
+    # Double-decode: outer JSON string → inner JSON object
+    patch_dict = json.loads(json.loads(p_value))
+    containers = patch_dict["spec"]["template"]["spec"]["containers"]
+    return containers[0]["args"]
+
+
+def test_patch_cmd_preserves_existing_args() -> None:
+    """_patch_cmd updates only --max-num-seqs; all other args are preserved (C4)."""
+    current_args = [
+        "--model=/data/models/mistral",
+        "--dtype=float16",
+        "--max-num-seqs=128",
+        "--tensor-parallel-size=2",
+    ]
+    cfg = make_cfg()
+    actuator = K8sActuator(cfg)
+    cmd = actuator._patch_cmd(256, current_args)  # noqa: SLF001
+    args = _decode_patch_args(cmd)
+    assert "--model=/data/models/mistral" in args
+    assert "--dtype=float16" in args
+    assert "--tensor-parallel-size=2" in args
+    assert "--max-num-seqs=256" in args
+    assert "--max-num-seqs=128" not in args
+
+
+def test_patch_cmd_appends_max_num_seqs_when_absent() -> None:
+    """_patch_cmd appends --max-num-seqs when the arg is not yet present (C4)."""
+    current_args = ["--model=/data/models/mistral", "--dtype=bfloat16"]
+    cfg = make_cfg()
+    actuator = K8sActuator(cfg)
+    cmd = actuator._patch_cmd(512, current_args)  # noqa: SLF001
+    args = _decode_patch_args(cmd)
+    assert "--model=/data/models/mistral" in args
+    assert "--max-num-seqs=512" in args
+
+
+def test_patch_cmd_live_args_fetched_in_live_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In live (non-dry-run) mode, apply() fetches live args before patching (C4)."""
+    import json as _json
+
+    live_args = ["--model=mistral", "--dtype=float16", "--max-num-seqs=128"]
+    dep_json = _json.dumps({
+        "spec": {"template": {"spec": {"containers": [
+            {"name": "vllm-server", "args": live_args}
+        ]}}}
+    })
+
+    cfg = make_cfg(dry_run=False, tune_mode="params")
+    actuator = K8sActuator(cfg)
+    # State: seqs at 128, target at 256 → a change will be issued
+    actuator.state.current_max_num_seqs = 128
+    expire_cooldowns(actuator)
+
+    # Runner returns dep JSON for get, then success for patch
+    responses = [(True, dep_json), (True, "patched")]
+    call_idx = [0]
+    calls: list[str] = []
+
+    def fake_run(cmd: str, check: bool = True) -> tuple[bool, str]:
+        calls.append(cmd)
+        resp = responses[min(call_idx[0], len(responses) - 1)]
+        call_idx[0] += 1
+        return resp
+
+    monkeypatch.setattr(actuator.runner, "run", fake_run)
+    actuator.apply(make_decision(target_max_num_seqs=256))
+
+    patch_calls = [c for c in calls if "patch" in c]
+    assert len(patch_calls) == 1
+    args = _decode_patch_args(patch_calls[0])
+    assert "--model=mistral" in args
+    assert "--dtype=float16" in args
+    assert "--max-num-seqs=256" in args
+    assert "--max-num-seqs=128" not in args
+
+
+# ---------------------------------------------------------------------------
+# H3 — _sync_initial_state also syncs max_num_seqs from container args
+# ---------------------------------------------------------------------------
+
+
+def test_sync_initial_state_syncs_max_num_seqs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_sync_initial_state reads --max-num-seqs from live container args (H3)."""
+    dep_json = json.dumps({
+        "spec": {
+            "replicas": 3,
+            "template": {"spec": {"containers": [
+                {"name": "vllm-server", "args": ["--max-num-seqs=512", "--model=mistral"]}
+            ]}},
+        },
+        "status": {},
+    })
+    from controller.kubectl_exec import KubectlCommandRunner
+
+    monkeypatch.setattr(
+        KubectlCommandRunner, "run",
+        lambda self, cmd, check=True: (True, dep_json),
+    )
+    cfg = make_cfg(min_replicas=1, max_replicas=8, min_max_num_seqs=128, max_max_num_seqs=2048)
+    actuator = K8sActuator(cfg)
+    assert actuator.state.current_replicas == 3
+    assert actuator.state.current_max_num_seqs == 512
+
+
+def test_sync_initial_state_clamps_max_num_seqs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Synced max_num_seqs is clamped to [min, max] bounds (H3)."""
+    dep_json = json.dumps({
+        "spec": {
+            "replicas": 2,
+            "template": {"spec": {"containers": [
+                {"name": "vllm-server", "args": ["--max-num-seqs=99999"]}
+            ]}},
+        }
+    })
+    from controller.kubectl_exec import KubectlCommandRunner
+
+    monkeypatch.setattr(
+        KubectlCommandRunner, "run",
+        lambda self, cmd, check=True: (True, dep_json),
+    )
+    cfg = make_cfg(min_max_num_seqs=128, max_max_num_seqs=1024)
+    actuator = K8sActuator(cfg)
+    assert actuator.state.current_max_num_seqs == 1024  # clamped to max
+
+
+# ---------------------------------------------------------------------------
+# H4 — Idempotency: no kubectl command when target equals current
+# ---------------------------------------------------------------------------
+
+
+def test_idempotency_no_scale_when_replicas_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No kubectl call is made when target replicas equal current replicas (H4)."""
+    cfg = make_cfg(dry_run=False, tune_mode="replicas")
+    actuator = K8sActuator(cfg)
+    actuator.state.current_replicas = 4
+    expire_cooldowns(actuator)
+
+    calls: list[str] = []
+    monkeypatch.setattr(actuator.runner, "run", lambda cmd, check=True: calls.append(cmd) or (True, ""))
+
+    action = actuator.apply(make_decision(target_replicas=4))
+    assert not any("scale" in c for c in calls), "scale command should not be issued when no change"
+    assert action.changed is False
+
+
+def test_idempotency_no_patch_when_seqs_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No kubectl call is made when target max_num_seqs equals current (H4)."""
+    cfg = make_cfg(dry_run=False, tune_mode="params")
+    actuator = K8sActuator(cfg)
+    actuator.state.current_max_num_seqs = 512
+    expire_cooldowns(actuator)
+
+    calls: list[str] = []
+    monkeypatch.setattr(actuator.runner, "run", lambda cmd, check=True: calls.append(cmd) or (True, ""))
+
+    action = actuator.apply(make_decision(target_max_num_seqs=512))
+    assert not any("patch" in c for c in calls), "patch command should not be issued when no change"
+    assert action.changed is False
+
+
+def test_idempotency_command_log_notes_no_change() -> None:
+    """'no change' appears in command_log when the target equals current (H4)."""
+    cfg = make_cfg(dry_run=True, tune_mode="both")
+    actuator = K8sActuator(cfg)
+    current_r = actuator.state.current_replicas
+    current_s = actuator.state.current_max_num_seqs
+    expire_cooldowns(actuator)
+
+    action = actuator.apply(make_decision(target_replicas=current_r, target_max_num_seqs=current_s))
+    assert any("no change" in e for e in action.command_log)

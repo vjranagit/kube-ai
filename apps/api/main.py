@@ -156,9 +156,17 @@ class ConfigUpdate(BaseModel):
             raise ValueError("ttft_slo_sec must be > 0")
         return v
 
-    @field_validator("min_replicas", "max_replicas", "min_max_num_seqs", "max_max_num_seqs")
+    @field_validator("min_replicas", "min_max_num_seqs")
     @classmethod
-    def check_non_negative(cls, v: int | None) -> int | None:
+    def check_min_positive(cls, v: int | None) -> int | None:
+        """min_replicas and min_max_num_seqs must be >= 1 (C3: no scale-to-zero)."""
+        if v is not None and v < 1:
+            raise ValueError("must be >= 1")
+        return v
+
+    @field_validator("max_replicas", "max_max_num_seqs")
+    @classmethod
+    def check_max_non_negative(cls, v: int | None) -> int | None:
         if v is not None and v < 0:
             raise ValueError("must be >= 0")
         return v
@@ -325,7 +333,7 @@ def post_api_config(update: ConfigUpdate) -> dict:
         if hasattr(cfg, k):
             setattr(cfg, k, v)
 
-    return {"ok": True, "updated": patch, "config_path": str(config_path)}
+    return {"ok": True, "updated": patch}  # M2: config_path removed — avoids leaking filesystem paths
 
 
 @app.post("/api/control/start")

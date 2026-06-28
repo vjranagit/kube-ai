@@ -53,6 +53,12 @@ def make_cfg(**overrides: Any) -> ControllerConfig:
         docker_container="",
         tuner_kind="aimd",
         metrics_port=9108,
+        # M1: RL fields omitted previously caused config.yaml bleed-through in E2E env.
+        rl_qtable_path="/nonexistent/qtable.json",
+        rl_alpha=0.1,
+        rl_gamma=0.9,
+        rl_epsilon=0.1,
+        rl_train_episodes=300,
     )
     params.update(overrides)
     return ControllerConfig(**params)

@@ -65,6 +65,16 @@ def _str(key: str, env_var: str, default: str) -> str:
     return str(_get(key, env_var, default))
 
 
+def reload_yaml() -> None:
+    """Reload the YAML config file into the module-level _YAML dict.
+
+    Call after writing a new config.yaml so that subsequent ControllerConfig()
+    instantiations see the updated values.  (L3)
+    """
+    global _YAML  # noqa: PLW0603
+    _YAML = _load_yaml(_CONFIG_PATH)
+
+
 @dataclass(slots=True)
 class ControllerConfig:
     # --- Control loop ---
@@ -140,3 +150,50 @@ class ControllerConfig:
     rl_train_episodes: int = field(
         default_factory=lambda: _int("rl_train_episodes", "RL_TRAIN_EPISODES", 300)
     )
+
+    def __post_init__(self) -> None:
+        """Validate configuration invariants at construction time.
+
+        Raises ValueError with a descriptive message on any misconfig so
+        operators see a clear diagnosis at startup rather than a silent
+        logic error later.  Addresses C3 (min >= 1) and H5 (cross-field).
+        """
+        if self.min_replicas < 1:
+            raise ValueError(
+                f"min_replicas ({self.min_replicas}) must be >= 1; "
+                "zero or negative replicas would scale the service to zero."
+            )
+        if self.min_max_num_seqs < 1:
+            raise ValueError(
+                f"min_max_num_seqs ({self.min_max_num_seqs}) must be >= 1."
+            )
+        if self.min_replicas > self.max_replicas:
+            raise ValueError(
+                f"min_replicas ({self.min_replicas}) must be <= "
+                f"max_replicas ({self.max_replicas})."
+            )
+        if self.min_max_num_seqs > self.max_max_num_seqs:
+            raise ValueError(
+                f"min_max_num_seqs ({self.min_max_num_seqs}) must be <= "
+                f"max_max_num_seqs ({self.max_max_num_seqs})."
+            )
+        if self.pressure_low >= self.pressure_high:
+            raise ValueError(
+                f"pressure_low ({self.pressure_low}) must be < "
+                f"pressure_high ({self.pressure_high}); "
+                "otherwise the controller cannot determine a scaling direction."
+            )
+        if self.interval_sec < 1:
+            raise ValueError(
+                f"interval_sec must be >= 1, got {self.interval_sec}."
+            )
+        # cooldown_sec and param_cooldown_sec of 0 are valid ("no cooldown");
+        # only negative values are rejected.
+        if self.cooldown_sec < 0:
+            raise ValueError(
+                f"cooldown_sec must be >= 0, got {self.cooldown_sec}."
+            )
+        if self.param_cooldown_sec < 0:
+            raise ValueError(
+                f"param_cooldown_sec must be >= 0, got {self.param_cooldown_sec}."
+            )

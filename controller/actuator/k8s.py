@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -62,33 +63,121 @@ class K8sActuator:
     # ------------------------------------------------------------------
 
     def _sync_initial_state(self) -> None:
-        """Read current Deployment replica count from the cluster and sync state.
+        """Read current Deployment state from the cluster and sync both replicas and
+        max_num_seqs.  (H3: was replica-only; now also syncs max_num_seqs.)
 
-        Skips silently if the cluster is unreachable (state keeps the safe default of 1).
-        Only syncs replicas; max_num_seqs is left at cfg.min_max_num_seqs because
-        the collector already parses it from container args when needed.
+        Skips silently if the cluster is unreachable (state keeps the safe defaults).
+        Deployment name and namespace are shlex-quoted to prevent shell injection (C2).
         """
-        dep = self.cfg.vllm_deployment
-        ns = self.cfg.vllm_namespace
-        cmd = f"get deployment {dep} --namespace {ns} -o jsonpath={{.spec.replicas}}"
+        dep = shlex.quote(self.cfg.vllm_deployment)
+        ns = shlex.quote(self.cfg.vllm_namespace)
+        cmd = f"get deployment {dep} --namespace {ns} -o json"
         try:
             ok, out = self.runner.run(cmd, check=False)
-            if ok and out.strip().isdigit():
-                live = int(out.strip())
-                clamped = max(self.cfg.min_replicas, min(self.cfg.max_replicas, live))
-                self.state.current_replicas = clamped
-                LOG.info("actuator initial replicas synced from cluster: %d", clamped)
+            if not ok:
+                return
+            data = json.loads(out)
+            # Sync replica count from spec.replicas
+            live_replicas = data.get("spec", {}).get("replicas")
+            if live_replicas is not None:
+                try:
+                    clamped = max(
+                        self.cfg.min_replicas,
+                        min(self.cfg.max_replicas, int(live_replicas)),
+                    )
+                    self.state.current_replicas = clamped
+                    LOG.info("actuator initial replicas synced from cluster: %d", clamped)
+                except (TypeError, ValueError):
+                    pass
+            # Sync max_num_seqs from container args (H3)
+            containers = (
+                data.get("spec", {})
+                .get("template", {})
+                .get("spec", {})
+                .get("containers", [])
+            )
+            for container in containers:
+                for arg in container.get("args", []):
+                    if arg.startswith("--max-num-seqs="):
+                        try:
+                            parsed = int(arg.split("=", 1)[1])
+                            clamped_seqs = max(
+                                self.cfg.min_max_num_seqs,
+                                min(self.cfg.max_max_num_seqs, parsed),
+                            )
+                            self.state.current_max_num_seqs = clamped_seqs
+                            LOG.info(
+                                "actuator initial max_num_seqs synced from cluster: %d",
+                                clamped_seqs,
+                            )
+                        except (TypeError, ValueError):
+                            pass
         except Exception as exc:  # noqa: BLE001
-            LOG.warning("failed to sync initial replicas from cluster: %s", exc)
+            LOG.warning("failed to sync initial state from cluster: %s", exc)
 
     def _scale_cmd(self, n: int) -> str:
-        dep = self.cfg.vllm_deployment
-        ns = self.cfg.vllm_namespace
+        """Build an injection-safe kubectl scale command (C2)."""
+        dep = shlex.quote(self.cfg.vllm_deployment)
+        ns = shlex.quote(self.cfg.vllm_namespace)
         return f"scale deployment {dep} --namespace {ns} --replicas={n}"
 
-    def _patch_cmd(self, max_num_seqs: int) -> str:
-        dep = self.cfg.vllm_deployment
-        ns = self.cfg.vllm_namespace
+    def _get_deployment_json(self) -> str:
+        """Fetch current deployment JSON from the cluster. Returns '{}' on failure."""
+        dep = shlex.quote(self.cfg.vllm_deployment)
+        ns = shlex.quote(self.cfg.vllm_namespace)
+        cmd = f"get deployment {dep} --namespace {ns} -o json"
+        try:
+            ok, out = self.runner.run(cmd, check=False)
+            return out if (ok and out) else "{}"
+        except Exception:  # noqa: BLE001
+            return "{}"
+
+    @staticmethod
+    def _parse_container_args(deployment_json: str, container_name: str) -> list[str]:
+        """Extract args for the named container from a deployment JSON string.
+
+        Falls back to the first container if the named one is not found.
+        Returns [] on any parse failure.
+        """
+        if not deployment_json:
+            return []
+        try:
+            data = json.loads(deployment_json)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return []
+        containers = (
+            data.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        )
+        for container in containers:
+            if container.get("name") == container_name:
+                return list(container.get("args", []))
+        if containers:
+            return list(containers[0].get("args", []))
+        return []
+
+    def _patch_cmd(self, max_num_seqs: int, current_args: list[str]) -> str:
+        """Build an injection-safe kubectl patch command that preserves all container
+        args except --max-num-seqs=N (C2 + C4).
+
+        Args:
+            max_num_seqs: The target value to set for --max-num-seqs.
+            current_args: The live container args list; only --max-num-seqs is
+                replaced or appended; all other flags are preserved.
+        """
+        dep = shlex.quote(self.cfg.vllm_deployment)
+        ns = shlex.quote(self.cfg.vllm_namespace)
+        new_arg = f"--max-num-seqs={max_num_seqs}"
+        # Replace existing --max-num-seqs=* in-place; append if absent
+        replaced = False
+        updated_args: list[str] = []
+        for arg in current_args:
+            if arg.startswith("--max-num-seqs="):
+                updated_args.append(new_arg)
+                replaced = True
+            else:
+                updated_args.append(arg)
+        if not replaced:
+            updated_args.append(new_arg)
         patch = json.dumps(
             {
                 "spec": {
@@ -96,8 +185,8 @@ class K8sActuator:
                         "spec": {
                             "containers": [
                                 {
-                                    "name": dep,
-                                    "args": [f"--max-num-seqs={max_num_seqs}"],
+                                    "name": self.cfg.vllm_deployment,
+                                    "args": updated_args,
                                 }
                             ]
                         }
@@ -142,20 +231,23 @@ class K8sActuator:
                     self.cfg.min_replicas,
                     min(self.cfg.max_replicas, decision.target_replicas),
                 )
-                cmd = self._scale_cmd(new_replicas)
-                ok, out = self._run_or_dry(cmd, self.cfg.dry_run)
-                log_entry = f"{'DRY_RUN' if self.cfg.dry_run else ('OK' if ok else 'ERR')} {cmd}"
-                if out and not self.cfg.dry_run:
-                    log_entry += f" :: {out}"
-                command_log.append(log_entry)
-
-                if ok:
-                    if new_replicas != old_replicas:
-                        replica_changed = True
-                    self.state.current_replicas = new_replicas
-                    self.last_replica_apply = now
+                if new_replicas == old_replicas:
+                    # H4: idempotency — skip kubectl when nothing would change
+                    command_log.append(f"replicas: no change ({new_replicas}), skip")
                 else:
-                    LOG.warning("scale command failed cmd=%s out=%s", cmd, out)
+                    cmd = self._scale_cmd(new_replicas)
+                    ok, out = self._run_or_dry(cmd, self.cfg.dry_run)
+                    log_entry = f"{'DRY_RUN' if self.cfg.dry_run else ('OK' if ok else 'ERR')} {cmd}"
+                    if out and not self.cfg.dry_run:
+                        log_entry += f" :: {out}"
+                    command_log.append(log_entry)
+
+                    if ok:
+                        replica_changed = True
+                        self.state.current_replicas = new_replicas
+                        self.last_replica_apply = now
+                    else:
+                        LOG.warning("scale command failed cmd=%s out=%s", cmd, out)
 
         # --- Path B: Params (max_num_seqs) ---
         if mode in ("params", "both"):
@@ -171,20 +263,30 @@ class K8sActuator:
                     self.cfg.min_max_num_seqs,
                     min(self.cfg.max_max_num_seqs, decision.target_max_num_seqs),
                 )
-                cmd = self._patch_cmd(new_max_num_seqs)
-                ok, out = self._run_or_dry(cmd, self.cfg.dry_run)
-                log_entry = f"{'DRY_RUN' if self.cfg.dry_run else ('OK' if ok else 'ERR')} {cmd}"
-                if out and not self.cfg.dry_run:
-                    log_entry += f" :: {out}"
-                command_log.append(log_entry)
-
-                if ok:
-                    if new_max_num_seqs != old_max_num_seqs:
-                        param_changed = True
-                    self.state.current_max_num_seqs = new_max_num_seqs
-                    self.last_param_apply = now
+                if new_max_num_seqs == old_max_num_seqs:
+                    # H4: idempotency — skip kubectl when nothing would change
+                    command_log.append(f"params: no change ({new_max_num_seqs}), skip")
                 else:
-                    LOG.warning("patch command failed cmd=%s out=%s", cmd, out)
+                    # C4: fetch live container args to preserve all flags except --max-num-seqs
+                    if self.cfg.dry_run:
+                        live_args: list[str] = []
+                    else:
+                        live_args = self._parse_container_args(
+                            self._get_deployment_json(), self.cfg.vllm_deployment
+                        )
+                    cmd = self._patch_cmd(new_max_num_seqs, live_args)
+                    ok, out = self._run_or_dry(cmd, self.cfg.dry_run)
+                    log_entry = f"{'DRY_RUN' if self.cfg.dry_run else ('OK' if ok else 'ERR')} {cmd}"
+                    if out and not self.cfg.dry_run:
+                        log_entry += f" :: {out}"
+                    command_log.append(log_entry)
+
+                    if ok:
+                        param_changed = True
+                        self.state.current_max_num_seqs = new_max_num_seqs
+                        self.last_param_apply = now
+                    else:
+                        LOG.warning("patch command failed cmd=%s out=%s", cmd, out)
 
         return AppliedAction(
             changed=replica_changed or param_changed,

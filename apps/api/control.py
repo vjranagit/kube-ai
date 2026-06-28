@@ -60,8 +60,8 @@ def start_loop(config_path: str | None = None) -> dict:
         try:
             _proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stdout=subprocess.DEVNULL,  # H1: PIPE never drained → pipe-buffer deadlock
+                stderr=subprocess.DEVNULL,
                 env=os.environ.copy(),
             )
         except Exception as exc:

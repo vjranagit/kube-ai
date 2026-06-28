@@ -50,7 +50,16 @@ LOG = logging.getLogger("kube-ai")
 
 
 def run(cfg: ControllerConfig, max_iterations: int = 0) -> None:
-    start_http_server(cfg.metrics_port)
+    try:
+        start_http_server(cfg.metrics_port)
+    except OSError as exc:
+        LOG.error(
+            "Cannot start metrics server on port %d: %s — "
+            "check for another process using this port.",
+            cfg.metrics_port,
+            exc,
+        )
+        sys.exit(1)
     collector = K8sCollector(cfg)
     policy = PolicyEngine(cfg)
     tuner = build_tuner(cfg)

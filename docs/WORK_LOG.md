@@ -39,6 +39,59 @@ None found in controller code. All modules matched their documented contracts ex
 - Bounds respected (min_replicas=1, max_replicas=5, min_max_num_seqs=128, max_max_num_seqs=1024).
 - 294 tests green in a clean checkout (no config.yaml present).
 
+## 2026-06-28 — Audit remediation (C1–C5, H1–H6, M2, M1, L1, L3)
+
+Resolved all 19 findings from the kube-ai security/robustness audit.
+
+### Critical (C1–C5) — all fixed
+| Finding | Fix | File(s) |
+|---------|-----|---------|
+| C1 | No code change needed (already using `subprocess.run` with list args in kubectl_exec) | — |
+| C2 | `shlex.quote()` on deployment/namespace in `_scale_cmd`, `_patch_cmd`, `_sync_initial_state`, `_fetch_deployment_json` | `controller/actuator/k8s.py`, `controller/collectors/k8s.py` |
+| C3 | `__post_init__` on `ControllerConfig` (min_replicas ≥ 1, min_max_num_seqs ≥ 1); split Pydantic validators in API | `controller/config.py`, `apps/api/main.py` |
+| C4 | `_patch_cmd` reads live container args via `-o json` and preserves all args except `--max-num-seqs=N` | `controller/actuator/k8s.py` |
+| C5 | `load_qtable` catches broad `Exception`; validates top-level type is `dict`; skips non-dict dimension values | `controller/tuner/rl.py` |
+
+### High (H1–H6) — all fixed
+| Finding | Fix | File(s) |
+|---------|-----|---------|
+| H1 | `stdout=subprocess.DEVNULL` (was PIPE → pipe-buffer deadlock risk) | `apps/api/control.py` |
+| H2 | `start_http_server` wrapped in `try/except OSError`; logs and calls `sys.exit(1)` | `controller/main.py` |
+| H3 | `_sync_initial_state` now fetches `-o json` and parses both `spec.replicas` and `--max-num-seqs=` container arg | `controller/actuator/k8s.py` |
+| H4 | Idempotency: skip `_scale_cmd` when `new_replicas == old_replicas`; skip `_patch_cmd` when `new_max_num_seqs == old_max_num_seqs` | `controller/actuator/k8s.py` |
+| H5 | `__post_init__` enforces cross-field invariants: min≤max replicas/seqs, pressure_low < pressure_high, interval_sec ≥ 1, cooldowns ≥ 0 | `controller/config.py` |
+| H6 | `save_qtable` writes to `.tmp` then `os.replace()` (atomic rename); creates parent dirs | `controller/tuner/rl.py` |
+
+### Medium / Low (quick + safe) — fixed
+| Finding | Fix | File(s) |
+|---------|-----|---------|
+| M1 | `make_cfg()` in conftest now includes all RL fields | `controller/tests/conftest.py` |
+| M2 | POST /api/config response no longer includes `config_path` | `apps/api/main.py` |
+| L1 | Removed `update` verb from RBAC ClusterRole (least-privilege) | `infra/k8s/controller-rbac.yaml` |
+| L3 | Added `reload_yaml()` function for config hot-reload | `controller/config.py` |
+
+### Deferred
+| Finding | Reason |
+|---------|--------|
+| M3 | `_gauge_val` uses private prometheus `_value.get()` API — requires prometheus_client refactor, deferred |
+| M4 | E2E_RESULTS.md clarification — documentation update, deferred |
+| M5 | `_percentile_from_buckets` fallback — requires signature change and None propagation throughout, deferred |
+| L2 | Controller Deployment resource limits in manifest — new infra file, deferred |
+
+### Test coverage added
+33 new tests (298 → 331 total):
+- C2: shell injection safety on metacharacter deployment/namespace names (2 tests)
+- C4: args-preserving patch, appends when absent, live fetch in non-dry-run (3 tests)
+- C5: JSON list / null / truncated / nested-non-dict all return `{}` (4 tests)
+- H1: `start_loop` stdout not PIPE (1 test)
+- H3: `_sync_initial_state` syncs max_num_seqs, clamps correctly (2 tests)
+- H4: idempotency skip for replicas, skip for seqs, log annotation (3 tests)
+- H5/C3: `__post_init__` validation — 13 tests covering zero/negative/inverted/zero-cooldowns
+- H6: atomic write leaves no .tmp, file valid after write, corrupt .tmp does not corrupt original (3 tests)
+- M2: response does not leak config_path (1 test)
+
+`ruff check .` clean. 331 passed both with and without `config.yaml`.
+
 ## 2026-06-28 — Gap fixes: test isolation + loop hardening
 
 ### Test isolation (12 failures fixed)

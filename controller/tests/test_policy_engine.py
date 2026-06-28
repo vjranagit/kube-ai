@@ -241,7 +241,7 @@ def test_swap_override_exactly_above_pressure_high_plus_epsilon() -> None:
 
 def test_swap_override_does_not_lower_high_composite_score() -> None:
     # If the composite score is already > pressure_high + 0.01, swap doesn't lower it
-    cfg = make_cfg(pressure_high=0.1)
+    cfg = make_cfg(pressure_high=0.1, pressure_low=0.05)  # pressure_low < pressure_high required
     policy = PolicyEngine(cfg)
     # Compose score ≈ 0.5 * 1.0 = 0.5 > 0.11
     snap = make_snap(waiting=10, running=0, swapped=1, kv_cache=0.0, p95_ttft=0.0)

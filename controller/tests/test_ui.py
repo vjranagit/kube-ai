@@ -268,3 +268,79 @@ def test_ui_index_contains_kube_ai() -> None:
 def test_ui_index_has_chart_js_script_tag() -> None:
     resp = _client.get("/ui/")
     assert "chart.js" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# H1 — start_loop must not use PIPE (pipe-buffer deadlock)
+# ---------------------------------------------------------------------------
+
+
+def test_start_loop_stdout_not_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """start_loop() must not use stdout=PIPE — that fills and deadlocks (H1)."""
+    import subprocess
+    import apps.api.control as _ctl
+
+    captured: dict = {}
+
+    class _FakeProc:
+        pid = 99999
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(*args: object, **kwargs: object) -> _FakeProc:
+        captured.update(kwargs)
+        return _FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    # Reset loop state so start_loop actually tries to start
+    monkeypatch.setitem(_ctl._loop_state, "running", False)
+    monkeypatch.setattr(_ctl, "_proc", None)
+
+    _ctl.start_loop()
+
+    assert captured.get("stdout") is not subprocess.PIPE, (
+        "stdout=PIPE causes pipe-buffer deadlock on long runs; use DEVNULL or a log file"
+    )
+    assert captured.get("stderr") is not subprocess.PIPE, (
+        "stderr=PIPE causes pipe-buffer deadlock on long runs; use DEVNULL or a log file"
+    )
+
+
+# ---------------------------------------------------------------------------
+# M2 — POST /api/config response must not expose filesystem path
+# ---------------------------------------------------------------------------
+
+
+def test_api_config_post_response_does_not_leak_config_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /api/config response must not include config_path (M2)."""
+    import apps.api.main as _m
+
+    monkeypatch.setattr(_m, "_current_config_path", lambda: tmp_path / "config.yaml")
+    resp = _client.post("/api/config", json={"tune_mode": "both"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "config_path" not in body, "config_path leaks the server filesystem path"
+
+
+def test_api_config_post_min_replicas_zero_returns_422(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /api/config with min_replicas=0 must return 422 (C3)."""
+    import apps.api.main as _m
+
+    monkeypatch.setattr(_m, "_current_config_path", lambda: tmp_path / "config.yaml")
+    resp = _client.post("/api/config", json={"min_replicas": 0})
+    assert resp.status_code == 422
+
+
+def test_api_config_post_min_max_num_seqs_zero_returns_422(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POST /api/config with min_max_num_seqs=0 must return 422 (C3)."""
+    import apps.api.main as _m
+
+    monkeypatch.setattr(_m, "_current_config_path", lambda: tmp_path / "config.yaml")
+    resp = _client.post("/api/config", json={"min_max_num_seqs": 0})
+    assert resp.status_code == 422

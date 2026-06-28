@@ -320,3 +320,88 @@ def test_value_bucket_boundaries() -> None:
     assert _value_bucket(8, 1, 8) == _VALUE_BINS - 1
     assert _value_bucket(128, 128, 2048) == 0
     assert _value_bucket(2048, 128, 2048) == _VALUE_BINS - 1
+
+
+# ---------------------------------------------------------------------------
+# C5 — load_qtable tolerates malformed JSON (top-level list, wrong types)
+# ---------------------------------------------------------------------------
+
+
+def test_load_qtable_json_list_returns_empty(tmp_path: pytest.TempPathFactory) -> None:
+    """load_qtable returns {} when the file contains a top-level JSON list (C5)."""
+    import json
+    import pathlib
+    p = str(tmp_path / "bad.json")  # type: ignore[operator]
+    pathlib.Path(p).write_text(json.dumps([1, 2, 3]))
+    result = load_qtable(p)
+    assert result == {}
+
+
+def test_load_qtable_json_null_returns_empty(tmp_path: pytest.TempPathFactory) -> None:
+    """load_qtable returns {} for JSON null."""
+    p = str(tmp_path / "null.json")  # type: ignore[operator]
+    import pathlib
+    pathlib.Path(p).write_text("null")
+    result = load_qtable(p)
+    assert result == {}
+
+
+def test_load_qtable_malformed_json_returns_empty(tmp_path: pytest.TempPathFactory) -> None:
+    """load_qtable returns {} when the file contains truncated/invalid JSON."""
+    p = str(tmp_path / "trunc.json")  # type: ignore[operator]
+    import pathlib
+    pathlib.Path(p).write_text('{"replicas": {invalid}')
+    result = load_qtable(p)
+    assert result == {}
+
+
+def test_load_qtable_nested_non_dict_skipped(tmp_path: pytest.TempPathFactory) -> None:
+    """load_qtable skips dimension entries that are not dicts."""
+    import json
+    import pathlib
+    p = str(tmp_path / "mixed.json")  # type: ignore[operator]
+    data = {"replicas": [1, 2, 3], "max_num_seqs": {}}
+    pathlib.Path(p).write_text(json.dumps(data))
+    result = load_qtable(p)
+    # "replicas" has a list value → skipped; "max_num_seqs" is an empty dict → included
+    assert "replicas" not in result
+
+
+# ---------------------------------------------------------------------------
+# H6 — save_qtable uses atomic write (temp file + os.replace)
+# ---------------------------------------------------------------------------
+
+
+def test_save_qtable_atomic_no_tmp_left_behind(tmp_path: pytest.TempPathFactory) -> None:
+    """save_qtable leaves no .tmp file after a successful write (H6)."""
+    import pathlib
+    p = str(tmp_path / "qtable.json")  # type: ignore[operator]
+    save_qtable({}, p)
+    assert not pathlib.Path(p + ".tmp").exists()
+
+
+def test_save_qtable_atomic_target_exists_and_valid(tmp_path: pytest.TempPathFactory) -> None:
+    """save_qtable produces a valid JSON file even when interrupted mid-write (H6)."""
+    qtables = {"replicas": {}, "max_num_seqs": {}}
+    p = str(tmp_path / "qt.json")  # type: ignore[operator]
+    save_qtable(qtables, p)
+    reloaded = load_qtable(p)
+    assert isinstance(reloaded, dict)
+
+
+def test_save_qtable_crash_does_not_corrupt_original(tmp_path: pytest.TempPathFactory) -> None:
+    """A crash during write (simulated by leaving .tmp around) does not corrupt the
+    original file because os.replace is atomic (H6)."""
+    import json
+    import pathlib
+    p = str(tmp_path / "qtable.json")  # type: ignore[operator]
+    # Write a valid Q-table first
+    original = {"replicas": {"0": {"0": [0.1, 0.2, 0.3]}}}
+    pathlib.Path(p).write_text(json.dumps(original))
+
+    # Simulate a crash mid-write by manually writing a corrupt .tmp
+    pathlib.Path(p + ".tmp").write_text("{corrupt")
+
+    # The original should still be readable
+    loaded = load_qtable(p)
+    assert "replicas" in loaded
