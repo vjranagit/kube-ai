@@ -1,0 +1,94 @@
+# Real vLLM (CPU backend) serving a tiny model — the real counterpart to mock-vllm.
+#
+# Image: vLLM's official CPU release image (public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo),
+# retagged locally as vllm-cpu:local and `kind load`ed into the cluster.
+# Entrypoint is ["vllm","serve"], so container args are the `vllm serve` arguments.
+# Container/Deployment name is `vllm-server` to match cfg.vllm_deployment and the actuator's
+# scale/patch commands (the actuator preserves all args and only rewrites --max-num-seqs=N).
+#
+# CPU note: vLLM on CPU needs VLLM_CPU_KVCACHE_SPACE (GiB). A tiny model (facebook/opt-125m)
+# + CPU inference is intentionally slow — that makes it easy to build real queue pressure with
+# modest concurrency for the stress test.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+  namespace: kube-ai
+  labels:
+    app: vllm-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-server
+  template:
+    metadata:
+      labels:
+        app: vllm-server
+    spec:
+      containers:
+        - name: vllm-server
+          image: vllm-cpu:local
+          imagePullPolicy: Never
+          args:
+            - "facebook/opt-125m"
+            - "--dtype=bfloat16"
+            - "--max-model-len=1024"
+            - "--max-num-seqs=16"
+            - "--host=0.0.0.0"
+            - "--port=8000"
+          env:
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: "4"
+            - name: OMP_NUM_THREADS
+              value: "2"
+            - name: HF_HOME
+              value: "/hf-cache"
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            requests:
+              cpu: "2"
+              memory: "5Gi"
+            limits:
+              memory: "7Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 60   # allow up to ~10 min for first model download + CPU load
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 600
+            periodSeconds: 30
+            failureThreshold: 10
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /hf-cache
+      volumes:
+        - name: hf-cache
+          hostPath:
+            path: /hf-cache          # on the kind node; shared across replicas for fast scale-out
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-server
+  namespace: kube-ai
+  labels:
+    app: vllm-server
+spec:
+  type: NodePort
+  selector:
+    app: vllm-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      nodePort: 30080      # kube-ai config scrapes http://localhost:30080/metrics
