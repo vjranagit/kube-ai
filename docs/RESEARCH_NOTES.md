@@ -2,10 +2,8 @@
 
 ## Attribution
 
-This is an independent, open-source educational/portfolio implementation inspired by publicly
-available papers. All code was written from scratch from public sources. It is **not** affiliated
-with, derived from, or representative of any proprietary or internal system, and uses no
-non-public information.
+kube-ai is an independent, open-source implementation. It is **not** affiliated with, derived from,
+or representative of any proprietary or internal system, and uses no non-public information.
 
 ---
 

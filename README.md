@@ -244,7 +244,7 @@ atomically to `models/qtable.json`.
 
 ## Security
 
-> **kube-ai is an MVP/portfolio project. Read these notes before exposing it to any network.**
+> **kube-ai ships unauthenticated by default. Read these notes before exposing it to any network.**
 
 - **No authentication.** The REST API (`/api/config`, `/api/control/start`, `/api/control/stop`,
   and all GET endpoints) and the Web UI are **completely unauthenticated**. Any network-reachable
@@ -266,15 +266,12 @@ atomically to `models/qtable.json`.
 
 ---
 
-## Attribution
+## References
 
-Independent educational/portfolio implementation inspired by:
-- *SelfTune: Tuning Cluster Managers* (USENIX NSDI 2023,
-  <https://www.usenix.org/conference/nsdi23/presentation/karthikeyan>)
-- *Chiron* (arXiv 2501.08090)
-
-Architectural blueprint: sibling project `slurm-ai`.
-Not affiliated with any proprietary system; no non-public information was used.
+Builds on ideas from public research — *SelfTune* (USENIX NSDI 2023,
+<https://www.usenix.org/conference/nsdi23/presentation/karthikeyan>) and *Chiron* (arXiv 2501.08090).
+Independent open-source implementation; not affiliated with any proprietary system; uses no
+non-public information. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 ---
 
